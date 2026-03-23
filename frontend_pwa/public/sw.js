@@ -32,8 +32,8 @@ self.addEventListener('push', function(event) {
 
     const opciones = {
         body: datos.mensaje,
-        icon: '/static/icon-192.png',
-        badge: '/static/icon-192.png',
+        icon: './assets/icon-192.png',
+        badge: './assets/icon-192.png',
         vibrate: [200, 100, 200, 100, 200],
         tag: `depthguard-${datos.tipo}-${Date.now()}`,
         requireInteraction: true,
@@ -42,7 +42,7 @@ self.addEventListener('push', function(event) {
             { action: 'cerrar', title: '✖️ Cerrar' }
         ],
         data: {
-            url: '/',
+            url: './',
             tipo: datos.tipo,
             timestamp: new Date().toISOString()
         }
@@ -90,7 +90,7 @@ self.addEventListener('notificationclick', function(event) {
             }
             // Si no hay ventana, abrir una nueva
             return self.clients.openWindow(
-                event.notification.data.url || '/'
+                event.notification.data.url || './'
             );
         })
     );

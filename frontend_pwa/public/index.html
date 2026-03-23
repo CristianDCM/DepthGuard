@@ -5,7 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>DepthGuard - Test Notificaciones</title>
-    <link rel="manifest" href="/manifest.json">
+    <link rel="manifest" href="./manifest.json">
     <meta name="theme-color" content="#e94560">
 
     <style>
@@ -416,7 +416,7 @@
 
             try {
                 const registro = await navigator.serviceWorker.register(
-                    '/sw.js'
+                    './sw.js'
                 );
                 actualizar_estado('sw', 'Registrado ✓', 'exito');
                 log('Service Worker registrado correctamente', 'exito');
@@ -482,8 +482,8 @@
                 await registro.showNotification('🛡️ DepthGuard', {
                     body: '⚠️ Intento de suplantación detectado\n'
                         + 'Puerta principal - Ahora',
-                    icon: '/static/icon-192.png',
-                    badge: '/static/icon-192.png',
+                    icon: './assets/icon-192.png',
+                    badge: './assets/icon-192.png',
                     vibrate: [200, 100, 200, 100, 200],
                     tag: 'test-local',
                     requireInteraction: true
