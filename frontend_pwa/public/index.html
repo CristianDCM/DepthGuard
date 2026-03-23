@@ -255,6 +255,40 @@
             font-size: 48px;
             margin-bottom: 10px;
         }
+
+        /* Aviso de compatibilidad */
+        .aviso-navegador {
+            display: none;
+            background: linear-gradient(135deg, #3a2a00, #2a1a00);
+            border: 1px solid #f59e0b;
+            border-radius: 12px;
+            padding: 15px;
+            margin-bottom: 15px;
+            color: #fbbf24;
+            font-size: 14px;
+            line-height: 1.6;
+        }
+
+        .aviso-navegador.visible {
+            display: block;
+            animation: aparecer 0.5s ease;
+        }
+
+        .aviso-navegador h3 {
+            color: #f59e0b;
+            margin-bottom: 8px;
+            font-size: 16px;
+        }
+
+        .aviso-navegador .badge-navegador {
+            display: inline-block;
+            background: #78350f;
+            padding: 2px 8px;
+            border-radius: 6px;
+            font-weight: bold;
+            font-size: 12px;
+            color: #fcd34d;
+        }
     </style>
 </head>
 
@@ -265,6 +299,21 @@
         <div class="header">
             <h1>🛡️ DepthGuard</h1>
             <p>Test de Notificaciones PWA</p>
+        </div>
+
+        <!-- AVISO DE COMPATIBILIDAD -->
+        <div class="aviso-navegador" id="aviso-navegador">
+            <h3>⚠️ Navegador detectado: <span class="badge-navegador" id="nombre-navegador"></span></h3>
+            <p>
+                Las notificaciones push podrían necesitar configuración extra.
+                Asegúrate de:
+            </p>
+            <p style="margin-top:8px; color:#fbbf24; line-height:1.8;">
+                1️⃣ <strong>Ajustes del teléfono</strong> → Apps → Edge → Notificaciones →
+                <strong>Activadas</strong><br>
+                2️⃣ <strong>Dentro de Edge</strong> → Configuración → Notificaciones del sitio → Permitir<br>
+                3️⃣ Si no funciona, prueba instalando desde <strong>Google Chrome</strong>
+            </p>
         </div>
 
         <!-- PASO 1: SERVICE WORKER -->
@@ -349,8 +398,8 @@
         // CONFIGURACIÓN
         // =============================================
 
-        // Llave VAPID en formato URL-safe base64 (raw uncompressed point)
-        const VAPID_PUBLIC_KEY = 'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEHX8713/DISLO5BknWNxRrv5rBHXG2FpercYFXhT3H5/8MlD77fakD5sPpal5btcvpJ/oUY4Oyt/D9U83cOd4EA==';
+        // Se obtiene dinámicamente del servidor
+        let VAPID_PUBLIC_KEY = null;
         // URL del servidor (se detecta automáticamente)
         const SERVER_URL = window.location.origin;
 
@@ -401,6 +450,23 @@
             return Uint8Array.from(
                 [...raw_data].map(char => char.charCodeAt(0))
             );
+        }
+
+        // =============================================
+        // OBTENER CLAVE VAPID DEL SERVIDOR
+        // =============================================
+        async function obtener_vapid_key() {
+            try {
+                const response = await fetch(`${SERVER_URL}/vapid_public_key`);
+                const data = await response.json();
+                VAPID_PUBLIC_KEY = data.public_key;
+                log('Clave VAPID obtenida del servidor', 'exito');
+                return true;
+            } catch (error) {
+                log(`Error obteniendo clave VAPID: ${error.message}`, 'error');
+                log('¿Está corriendo el servidor? (node server.js)', 'alerta');
+                return false;
+            }
         }
 
         // =============================================
@@ -458,6 +524,9 @@
                     document.getElementById('btn-local').disabled = false;
                     document.getElementById('btn-suscribir').disabled = false;
 
+                    // Activar polling como respaldo universal
+                    iniciar_polling();
+
                 } else if (permiso === 'denied') {
                     actualizar_estado('permiso', 'Denegado ✗', 'error');
                     log('Permiso DENEGADO por el usuario', 'error');
@@ -500,9 +569,23 @@
         async function suscribir_push() {
             log('Iniciando suscripción push...');
 
+            if (!VAPID_PUBLIC_KEY) {
+                log('Error: No se ha obtenido la clave VAPID', 'error');
+                return;
+            }
+
             try {
                 const registro = await navigator.serviceWorker.ready;
 
+                // Paso importante: desuscribir la anterior (por cambio de claves VAPID)
+                const sub_existente = await registro.pushManager.getSubscription();
+                if (sub_existente) {
+                    log('Desuscribiendo suscripción anterior...');
+                    await sub_existente.unsubscribe();
+                    log('Suscripción anterior eliminada', 'exito');
+                }
+
+                // Crear nueva suscripción con la clave VAPID actual
                 const suscripcion = await registro.pushManager.subscribe({
                     userVisibleOnly: true,
                     applicationServerKey:
@@ -510,8 +593,18 @@
                 });
 
                 log('Suscripción creada, enviando al servidor...');
+                log(`Endpoint: ${suscripcion.endpoint.substring(0, 60)}...`, 'info');
 
-                // Enviar suscripción al servidor Python
+                // Detectar servicio push usado
+                if (suscripcion.endpoint.includes('fcm.googleapis.com')) {
+                    log('Servicio push: FCM (Google) ✅', 'exito');
+                } else if (suscripcion.endpoint.includes('wns')) {
+                    log('Servicio push: WNS (Microsoft) ⚠️ — puede no funcionar', 'alerta');
+                } else {
+                    log(`Servicio push: Desconocido ⚠️ — ${suscripcion.endpoint.substring(0, 40)}`, 'alerta');
+                }
+
+                // Enviar suscripción al servidor
                 const response = await fetch(`${SERVER_URL}/suscribir`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -552,12 +645,18 @@
                     })
                 });
 
+                const data = await response.json();
+
                 if (response.ok) {
-                    log('Servidor envió la push', 'exito');
-                    log('Espera la notificación...', 'alerta');
+                    log(`Resultado: ${data.enviadas} enviadas, ${data.fallidas} fallidas`, 'exito');
+                    if (data.errores && data.errores.length > 0) {
+                        data.errores.forEach(err => log(`  Error: ${err}`, 'error'));
+                    }
+                    if (data.enviadas > 0) {
+                        log('Espera la notificación en el teléfono...', 'alerta');
+                    }
                 } else {
-                    const error = await response.json();
-                    throw new Error(error.detail || 'Error del servidor');
+                    throw new Error(data.detail || 'Error del servidor');
                 }
 
             } catch (error) {
@@ -566,16 +665,128 @@
         }
 
         // =============================================
+        // PASO 5: POLLING FALLBACK (para Edge y otros)
+        // =============================================
+        let polling_activo = false;
+        let polling_intervalo = null;
+        let ultimo_timestamp = new Date().toISOString();
+        let alertas_vistas = new Set();
+
+        function iniciar_polling() {
+            if (polling_activo) return;
+            polling_activo = true;
+
+            log('📡 Polling activado (fallback para este navegador)', 'alerta');
+
+            polling_intervalo = setInterval(async () => {
+                try {
+                    const response = await fetch(
+                        `${SERVER_URL}/alertas_recientes?desde=${encodeURIComponent(ultimo_timestamp)}`
+                    );
+                    const data = await response.json();
+
+                    if (data.alertas && data.alertas.length > 0) {
+                        for (const alerta of data.alertas) {
+                            // Evitar mostrar la misma alerta dos veces
+                            if (alertas_vistas.has(alerta.id)) continue;
+                            alertas_vistas.add(alerta.id);
+
+                            // Actualizar timestamp
+                            ultimo_timestamp = alerta.timestamp;
+
+                            log(`📡 Alerta recibida via polling: ${alerta.mensaje}`, 'exito');
+
+                            // Mostrar notificación local
+                            if (Notification.permission === 'granted') {
+                                try {
+                                    const reg = await navigator.serviceWorker.ready;
+                                    await reg.showNotification(
+                                        alerta.titulo || '🛡️ DepthGuard', {
+                                        body: alerta.mensaje,
+                                        icon: './assets/icon-192.png',
+                                        badge: './assets/icon-192.png',
+                                        vibrate: [200, 100, 200, 100, 200],
+                                        tag: `poll-${alerta.id}`,
+                                        requireInteraction: true,
+                                        silent: false,
+                                        renotify: true,
+                                    });
+                                    log('🔔 Notificación mostrada via polling', 'exito');
+
+                                    document.getElementById('confirmacion')
+                                        .classList.add('visible');
+                                } catch (e) {
+                                    log(`Error mostrando notificación: ${e.message}`, 'error');
+                                }
+                            }
+                        }
+                    }
+                } catch (e) {
+                    // Silenciar errores de red en polling
+                }
+            }, 4000); // Cada 4 segundos
+        }
+
+        function detener_polling() {
+            if (polling_intervalo) {
+                clearInterval(polling_intervalo);
+                polling_intervalo = null;
+                polling_activo = false;
+                log('Polling detenido', 'info');
+            }
+        }
+
+        // =============================================
         // INICIALIZACIÓN
         // =============================================
+        // =============================================
+        // DETECCIÓN DE NAVEGADOR
+        // =============================================
+        function detectar_navegador() {
+            const ua = navigator.userAgent;
+            if (ua.includes('EdgA') || ua.includes('Edg/')) {
+                return { nombre: 'Edge', compatible: false };
+            }
+            if (ua.includes('Firefox')) {
+                return { nombre: 'Firefox', compatible: false };
+            }
+            if (ua.includes('SamsungBrowser')) {
+                return { nombre: 'Samsung Internet', compatible: false };
+            }
+            if (ua.includes('Opera') || ua.includes('OPR')) {
+                return { nombre: 'Opera', compatible: false };
+            }
+            if (ua.includes('CriOS')) {
+                return { nombre: 'Chrome iOS', compatible: false };
+            }
+            if (ua.includes('Chrome') && ua.includes('Android')) {
+                return { nombre: 'Chrome Android', compatible: true };
+            }
+            if (ua.includes('Chrome')) {
+                return { nombre: 'Chrome', compatible: true };
+            }
+            return { nombre: 'Desconocido', compatible: false };
+        }
+
         window.addEventListener('load', async () => {
             log('Iniciando prueba de notificaciones...');
 
-            // Verificar VAPID key
-            if (VAPID_PUBLIC_KEY === 'PEGAR_TU_LLAVE_PUBLICA_AQUI') {
-                log('⚠️ FALTA: Pegar la llave VAPID en el HTML',
-                    'error');
-                log('Ejecuta: python generar_llaves.py', 'alerta');
+            // Detectar navegador y mostrar aviso si necesita config extra
+            const navegador = detectar_navegador();
+            log(`Navegador detectado: ${navegador.nombre}`, navegador.compatible ? 'exito' : 'alerta');
+
+            if (!navegador.compatible) {
+                const aviso = document.getElementById('aviso-navegador');
+                document.getElementById('nombre-navegador').textContent = navegador.nombre;
+                aviso.classList.add('visible');
+                log(`ℹ️ ${navegador.nombre}: se usará polling como respaldo`, 'alerta');
+            }
+
+            // Obtener clave VAPID del servidor
+            const vapid_ok = await obtener_vapid_key();
+            if (!vapid_ok) {
+                log('⚠️ No se pudo conectar al servidor', 'error');
+                log('Ejecuta: python server.py', 'alerta');
             }
 
             // Registrar Service Worker
@@ -589,6 +800,9 @@
                 document.getElementById('btn-suscribir')
                     .disabled = false;
                 log('Permiso ya estaba concedido', 'exito');
+
+                // Activar polling como respaldo universal
+                iniciar_polling();
             } else if (Notification.permission === 'denied') {
                 actualizar_estado('permiso',
                     'Bloqueado en ajustes', 'error');

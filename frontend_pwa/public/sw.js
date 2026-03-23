@@ -1,9 +1,10 @@
 /*
  * Service Worker para DepthGuard
  * Maneja notificaciones push en segundo plano
+ * Compatible con Chrome, Edge, y otros navegadores Chromium
  */
 
-// Se ejecuta cuando llega una push (incluso con la app cerrada)
+// ─── PUSH: Se ejecuta cuando llega una push (incluso con la app cerrada) ───
 self.addEventListener('push', function(event) {
     console.log('[SW] Push recibida');
 
@@ -22,14 +23,6 @@ self.addEventListener('push', function(event) {
         }
     }
 
-    // Icono según tipo de alerta
-    const iconos = {
-        fraude:  '🚨',
-        acceso:  '✅',
-        desconocido: '❓',
-        info: '🛡️'
-    };
-
     const opciones = {
         body: datos.mensaje,
         icon: './assets/icon-192.png',
@@ -37,6 +30,8 @@ self.addEventListener('push', function(event) {
         vibrate: [200, 100, 200, 100, 200],
         tag: `depthguard-${datos.tipo}-${Date.now()}`,
         requireInteraction: true,
+        silent: false,
+        renotify: true,
         actions: [
             { action: 'ver', title: '👁️ Ver detalle' },
             { action: 'cerrar', title: '✖️ Cerrar' }
@@ -48,17 +43,14 @@ self.addEventListener('push', function(event) {
         }
     };
 
-    // Mostrar la notificación
+    // Mostrar la notificación + avisar a la página
     event.waitUntil(
         self.registration.showNotification(
             datos.titulo || '🛡️ DepthGuard',
             opciones
-        )
-    );
-
-    // Avisar a la página (si está abierta) que llegó una push
-    event.waitUntil(
-        self.clients.matchAll().then(function(clientes) {
+        ).then(function() {
+            return self.clients.matchAll();
+        }).then(function(clientes) {
             clientes.forEach(function(cliente) {
                 cliente.postMessage('push-recibido');
             });
@@ -67,7 +59,7 @@ self.addEventListener('push', function(event) {
 });
 
 
-// Se ejecuta cuando el usuario toca la notificación
+// ─── CLICK: Se ejecuta cuando el usuario toca la notificación ───
 self.addEventListener('notificationclick', function(event) {
     console.log('[SW] Notificación tocada');
     event.notification.close();
@@ -82,13 +74,11 @@ self.addEventListener('notificationclick', function(event) {
             type: 'window',
             includeUncontrolled: true
         }).then(function(clientes) {
-            // Si ya hay una ventana abierta, enfocarla
             for (let cliente of clientes) {
                 if (cliente.url.includes('/') && 'focus' in cliente) {
                     return cliente.focus();
                 }
             }
-            // Si no hay ventana, abrir una nueva
             return self.clients.openWindow(
                 event.notification.data.url || './'
             );
@@ -97,13 +87,46 @@ self.addEventListener('notificationclick', function(event) {
 });
 
 
-// Instalación del Service Worker
+// ─── FETCH: Requerido para que Edge no desactive el Service Worker ───
+// IMPORTANTE: Solo registrar el listener, NO usar event.respondWith()
+// porque interceptar requests rompe el push en background en Chrome.
+self.addEventListener('fetch', function(event) {
+    // No hacer nada — el browser maneja el request normalmente.
+    // Solo la presencia de este listener mantiene el SW activo en Edge.
+    return;
+});
+
+
+// ─── PUSH SUBSCRIPTION CHANGE: Re-suscripción automática ───
+// Si el navegador renueva la suscripción, re-enviar al servidor.
+self.addEventListener('pushsubscriptionchange', function(event) {
+    console.log('[SW] Suscripción push cambió, re-suscribiendo...');
+    event.waitUntil(
+        self.registration.pushManager.subscribe(
+            event.oldSubscription.options
+        ).then(function(nuevaSub) {
+            return fetch('./suscribir', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(nuevaSub.toJSON())
+            });
+        }).then(function() {
+            console.log('[SW] Re-suscripción exitosa');
+        }).catch(function(error) {
+            console.error('[SW] Error re-suscribiendo:', error);
+        })
+    );
+});
+
+
+// ─── INSTALL ───
 self.addEventListener('install', function(event) {
     console.log('[SW] Instalado');
     self.skipWaiting();
 });
 
-// Activación
+
+// ─── ACTIVATE ───
 self.addEventListener('activate', function(event) {
     console.log('[SW] Activado');
     event.waitUntil(self.clients.claim());
