@@ -6,6 +6,7 @@ venv/
 
 # Llaves privadas VAPID (NUNCA subir)
 private_key.pem
+vapid_keys.json
 
 # Cache Python
 __pycache__/

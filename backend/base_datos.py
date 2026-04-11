@@ -2,12 +2,37 @@
 
 import sqlite3
 import json
-import threading
+import hashlib
 import os
+import threading
 import datetime
 from config.settings import DB_PATH, ADMIN_USUARIO, ADMIN_PASSWORD
 
 _lock = threading.Lock()
+
+
+def _hash_password(password, salt=None):
+    """Genera hash seguro con PBKDF2-SHA256 + salt aleatorio."""
+    if salt is None:
+        salt = os.urandom(16)
+    elif isinstance(salt, str):
+        salt = bytes.fromhex(salt)
+
+    hash_bytes = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt, 100_000
+    )
+    return salt.hex() + ":" + hash_bytes.hex()
+
+
+def _verificar_password(password, hash_almacenado):
+    """Verifica un password contra su hash almacenado."""
+    if ":" not in hash_almacenado:
+        # Password legacy sin hash (plain text) — migrar
+        return password == hash_almacenado
+
+    salt_hex = hash_almacenado.split(":")[0]
+    hash_esperado = _hash_password(password, salt_hex)
+    return hash_esperado == hash_almacenado
 
 
 class BaseDatos:
@@ -60,7 +85,7 @@ class BaseDatos:
         try:
             c.execute(
                 "INSERT INTO admin (usuario, password) VALUES (?, ?)",
-                (ADMIN_USUARIO, ADMIN_PASSWORD)
+                (ADMIN_USUARIO, _hash_password(ADMIN_PASSWORD))
             )
         except sqlite3.IntegrityError:
             pass
@@ -77,18 +102,39 @@ class BaseDatos:
     def verificar_admin(self, usuario, password):
         conn = self._conectar()
         row = conn.execute(
-            "SELECT * FROM admin WHERE usuario=? AND password=?",
-            (usuario, password)
+            "SELECT * FROM admin WHERE usuario=?",
+            (usuario,)
         ).fetchone()
         conn.close()
-        return dict(row) if row else None
+
+        if row is None:
+            return None
+
+        admin = dict(row)
+        if _verificar_password(password, admin["password"]):
+            # Migrar passwords legacy a hash si se detectan
+            if ":" not in admin["password"]:
+                self._migrar_password(usuario, password)
+            return admin
+        return None
+
+    def _migrar_password(self, usuario, password):
+        """Migra un password plain text a hash."""
+        with _lock:
+            conn = self._conectar()
+            conn.execute(
+                "UPDATE admin SET password=? WHERE usuario=?",
+                (_hash_password(password), usuario)
+            )
+            conn.commit()
+            conn.close()
 
     def crear_admin(self, usuario, password):
         with _lock:
             conn = self._conectar()
             conn.execute(
                 "INSERT INTO admin (usuario, password) VALUES (?, ?)",
-                (usuario, password)
+                (usuario, _hash_password(password))
             )
             conn.commit()
             conn.close()
