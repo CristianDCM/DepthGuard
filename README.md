@@ -37,7 +37,15 @@ copy .env.example .env  # Windows
 # cp .env.example .env  # Linux
 ```
 
-## Uso
+## Instalación rápida (Windows)
+
+Si es la primera vez que ejecutas el proyecto en esta computadora:
+
+1. Asegúrate de tener **Python 3.10+** instalado ([descargar](https://www.python.org/downloads/))
+2. Haz doble clic en **`INSTALAR.bat`** — crea el entorno virtual e instala todo automáticamente
+3. Haz doble clic en **`INICIAR.bat`** — arranca el sistema
+
+## Uso manual
 
 ```powershell
 .\venv\Scripts\activate
@@ -61,10 +69,11 @@ Configurar `MODO_CAMARA` en `.env`:
 
 ```
 DepthGuard/
-├── iniciar.py              # Punto de entrada
-├── Dockerfile              # Imagen Docker
-├── docker-compose.yml      # Orquestación de contenedores
-├── .dockerignore           # Exclusiones para Docker
+├── INSTALAR.bat            # 🔧 Instalador automático (doble clic)
+├── INICIAR.bat             # 🚀 Lanzador del sistema (doble clic)
+├── iniciar.py              # Punto de entrada Python
+├── Dockerfile              # Imagen Docker (opcional, para la nube)
+├── docker-compose.yml      # Orquestación Docker
 ├── config/
 │   └── settings.py         # Configuración centralizada (.env)
 ├── motor_ia/
