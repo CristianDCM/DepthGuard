@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config.settings import PORT, CAPTURAS_DIR
 from backend.base_datos import BaseDatos
 from motor_ia.pipeline import ejecutar_pipeline
+from motor_ia.estado_registro import EstadoRegistro
 
 os.makedirs(CAPTURAS_DIR, exist_ok=True)
 
@@ -30,16 +31,7 @@ db = BaseDatos()
 print("✅ Base de datos lista")
 
 cola_eventos = queue.Queue()
-
-modo_registro = {
-    "activo": False,
-    "nombre": "",
-    "embeddings": [],
-    "paso": 0,
-    "completado": False,
-    "resultado": {},
-    "recargar_cache": False
-}
+modo_registro = EstadoRegistro()
 
 hilo_ia = threading.Thread(
     target=ejecutar_pipeline,

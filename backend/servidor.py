@@ -83,28 +83,17 @@ def crear_app(cola_eventos, modo_registro, db):
     @app.delete("/usuarios/{uid}")
     def eliminar(uid: int):
         db.eliminar_usuario(uid)
-        modo_registro["recargar_cache"] = True
+        modo_registro.recargar_cache = True
         return {"mensaje": "Eliminado"}
 
     @app.post("/registrar_usuario")
     def registrar(datos: RegistroRequest):
-        modo_registro["activo"] = True
-        modo_registro["nombre"] = datos.nombre
-        modo_registro["embeddings"] = []
-        modo_registro["paso"] = 0
+        modo_registro.iniciar(datos.nombre)
         return {"mensaje": f"Registro iniciado para {datos.nombre}"}
 
     @app.get("/registro_estado")
     def registro_estado():
-        if modo_registro.get("completado"):
-            resultado = modo_registro.get("resultado", {})
-            modo_registro["completado"] = False
-            return {"completado": True, "datos": resultado}
-        return {
-            "completado": False,
-            "activo": modo_registro.get("activo", False),
-            "paso": modo_registro.get("paso", 0)
-        }
+        return modo_registro.obtener_estado()
 
     @app.post("/suscribir_push")
     def suscribir(suscripcion: dict):
