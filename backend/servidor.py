@@ -56,6 +56,10 @@ def crear_app(cola_eventos, modo_registro, db):
     def inicio():
         return {"sistema": "DepthGuard", "estado": "activo"}
 
+    @app.get("/api/health")
+    def health():
+        return {"status": "ok"}
+
     @app.get("/estado")
     def estado():
         return {

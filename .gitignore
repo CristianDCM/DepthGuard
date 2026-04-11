@@ -17,3 +17,6 @@ __pycache__/
 
 # Capturas de fotos
 backend/capturas/
+
+# Docker volumes (datos persistentes)
+data/

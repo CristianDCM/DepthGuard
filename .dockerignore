@@ -1,0 +1,47 @@
+# Entorno virtual (se instala dentro del contenedor)
+venv/
+
+# Git
+.git/
+.gitignore
+
+# Variables de entorno (se pasan con --env-file)
+.env
+
+# Cache Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Base de datos local (se monta como volumen)
+*.db
+
+# Capturas locales
+backend/capturas/
+
+# IDE
+.vscode/
+.idea/
+
+# Llaves privadas
+private_key.pem
+vapid_keys.json
+
+# Docker files (no necesarios dentro de la imagen)
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Node modules del frontend (archivos estáticos se copian directamente)
+frontend_pwa/node_modules/
+
+# Documentación
+*.md
+walkthrough.md
+AGENTS.md
+
+# Tests
+tests/
+
+# Data directory (montado como volumen)
+data/

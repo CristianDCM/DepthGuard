@@ -62,6 +62,9 @@ Configurar `MODO_CAMARA` en `.env`:
 ```
 DepthGuard/
 ├── iniciar.py              # Punto de entrada
+├── Dockerfile              # Imagen Docker
+├── docker-compose.yml      # Orquestación de contenedores
+├── .dockerignore           # Exclusiones para Docker
 ├── config/
 │   └── settings.py         # Configuración centralizada (.env)
 ├── motor_ia/
@@ -105,6 +108,35 @@ python scripts/servidor_push_test.py
 - **Contraseña:** `admin123`
 
 Cambiar en `.env` (`ADMIN_USUARIO`, `ADMIN_PASSWORD`).
+
+## Docker
+
+### Requisitos
+
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) instalado
+
+### Ejecución con Docker
+
+```bash
+# Construir y levantar
+docker-compose up --build
+
+# Levantar en segundo plano
+docker-compose up -d
+
+# Ver logs
+docker-compose logs -f
+
+# Detener
+docker-compose down
+
+# Reconstruir después de cambios
+docker-compose up --build
+```
+
+Docker ejecuta el proyecto en modo `simulada` automáticamente. Los datos (base de datos y capturas) se persisten en la carpeta `data/` mediante volúmenes.
+
+> **Nota:** La primera construcción puede tardar varios minutos por la compilación de `dlib`.
 
 ## Licencia
 
