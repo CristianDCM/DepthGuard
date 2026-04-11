@@ -2,10 +2,10 @@
 DepthGuard - Mini servidor para test de Push Notifications
 
 Uso:
-    cd frontend_pwa/public
-    ..\..\venv\Scripts\python.exe server.py
+    cd scripts
+    ..\venv\Scripts\python.exe servidor_push_test.py
 
-    (luego en otra terminal: ngrok hsttp 3000)
+    (luego en otra terminal: ngrok http 3000)
 """
 
 import json
@@ -244,8 +244,8 @@ async def alertas_recientes(desde: str = ""):
 
 
 
-# ─── Servir archivos estáticos (al final para no interferir con rutas API)
-app.mount("/", StaticFiles(directory=Path(__file__).parent, html=True), name="static")
+FRONTEND_DIR = Path(__file__).parent.parent / "frontend_pwa" / "public"
+app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="static")
 
 # ─── Iniciar ─────────────────────────────────────────────
 if __name__ == "__main__":

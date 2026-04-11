@@ -786,7 +786,7 @@
             const vapid_ok = await obtener_vapid_key();
             if (!vapid_ok) {
                 log('⚠️ No se pudo conectar al servidor', 'error');
-                log('Ejecuta: python server.py', 'alerta');
+                log('Ejecuta: python scripts/servidor_push_test.py', 'alerta');
             }
 
             // Registrar Service Worker
