@@ -14,6 +14,7 @@ from motor_ia.camara.factory import crear_camara
 from motor_ia.deteccion.face_mesh import DetectorFaceMesh
 from motor_ia.antispoofing.verificador_3d import VerificadorAntiSpoofing
 from motor_ia.reconocimiento.embedding_generator import ReconocedorFacial
+from motor_ia.visualizacion import dibujar_preview, mostrar_preview
 from config.settings import (
     COOLDOWN_EMBEDDING, COOLDOWN_ANTISPOOFING,
     COOLDOWN_EVENTO, CAPTURAS_DIR
@@ -29,70 +30,10 @@ def _guardar_foto(imagen, prefijo):
     return f"/capturas/{nombre}"
 
 
-def _dibujar_preview(frame, bbox, es_real, es_dist, motivo, metricas,
-                     nombre_reconocido, confianza, modo_registro_activo):
-    """Dibuja overlays de debug sobre el frame para la ventana de preview."""
-    vista = frame.copy()
-
-    if bbox is not None:
-        x, y, x2, y2 = bbox
-
-        # Color del bbox según estado
-        if modo_registro_activo:
-            color_bbox = (255, 165, 0)  # Naranja - registro
-            etiqueta = "REGISTRO"
-        elif not es_real and not es_dist:
-            color_bbox = (0, 0, 255)  # Rojo - fraude
-            etiqueta = f"FRAUDE: {motivo}"
-        elif es_dist:
-            color_bbox = (0, 165, 255)  # Naranja - distancia
-            etiqueta = motivo
-        elif nombre_reconocido:
-            color_bbox = (0, 255, 0)  # Verde - reconocido
-            etiqueta = f"{nombre_reconocido} ({confianza}%)"
-        elif es_real:
-            color_bbox = (0, 255, 255)  # Amarillo - real pero no reconocido
-            etiqueta = "Persona no registrada"
-        else:
-            color_bbox = (128, 128, 128)  # Gris
-            etiqueta = "Analizando..."
-
-        # Dibujar bbox
-        cv2.rectangle(vista, (x, y), (x2, y2), color_bbox, 2)
-
-        # Fondo para etiqueta
-        tam, _ = cv2.getTextSize(etiqueta, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-        cv2.rectangle(vista, (x, y - 28), (x + tam[0] + 8, y), color_bbox, -1)
-        cv2.putText(vista, etiqueta, (x + 4, y - 8),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
-
-        # Métricas en esquina inferior
-        if metricas:
-            y_met = vista.shape[0] - 10
-            textos = []
-            if "distancia" in metricas:
-                textos.append(f"Dist: {metricas['distancia']}cm")
-            if "varianza" in metricas:
-                textos.append(f"Var: {metricas['varianza']}")
-            if "rango" in metricas:
-                textos.append(f"Rango: {metricas['rango']}")
-            if "direccion" in metricas:
-                textos.append(f"Dir: {metricas['direccion']}")
-
-            info = " | ".join(textos)
-            cv2.putText(vista, info, (10, y_met),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, (255, 255, 255), 1)
-
-    # Título
-    cv2.putText(vista, "DEPTHGUARD - Preview", (10, 25),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-
-    return vista
-
-
 def ejecutar_pipeline(cola_eventos, modo_registro, db_manager):
     """
     Bucle principal. Corre en un hilo separado.
+    modo_registro: instancia de EstadoRegistro (thread-safe).
     """
 
     # Crear componentes
@@ -153,8 +94,7 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager):
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
                 cv2.putText(vista, "Sin rostro detectado", (10, 55),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 100), 1)
-                cv2.imshow("DepthGuard - Preview", vista)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
+                if mostrar_preview(vista):
                     break
                 time.sleep(0.05)
                 continue
@@ -171,19 +111,18 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager):
 
             if spoofing_cache is None:
                 # Mostrar preview básico mientras se analiza
-                vista = _dibujar_preview(
+                vista = dibujar_preview(
                     color, bbox, True, False, "Analizando...", {},
-                    None, 0, modo_registro["activo"]
+                    None, 0, modo_registro.activo
                 )
-                cv2.imshow("DepthGuard - Preview", vista)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
+                if mostrar_preview(vista):
                     break
                 continue
 
             es_real, es_dist, motivo, metricas = spoofing_cache
 
             # === REGISTRO ===
-            if modo_registro["activo"] and es_real:
+            if modo_registro.activo and es_real:
                 embedding = reconocedor.generar_embedding(imagen_rgb, bbox)
                 if embedding is not None:
                     cola_eventos.put({
@@ -193,12 +132,11 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager):
                         "frame": color.copy()
                     })
                 # Preview en modo registro
-                vista = _dibujar_preview(
+                vista = dibujar_preview(
                     color, bbox, es_real, es_dist, motivo, metricas,
                     None, 0, True
                 )
-                cv2.imshow("DepthGuard - Preview", vista)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
+                if mostrar_preview(vista):
                     break
                 continue
 
@@ -215,77 +153,57 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager):
                         "frame": color.copy()
                     })
                 nombre_actual = None
-                # Preview fraude
-                vista = _dibujar_preview(
-                    color, bbox, es_real, es_dist, motivo, metricas,
-                    None, 0, False
-                )
-                cv2.imshow("DepthGuard - Preview", vista)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
-                continue
 
             # === DISTANCIA ===
-            if es_dist:
-                # Preview distancia
-                vista = _dibujar_preview(
-                    color, bbox, es_real, es_dist, motivo, metricas,
-                    None, 0, False
-                )
-                cv2.imshow("DepthGuard - Preview", vista)
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
-                continue
+            elif es_dist:
+                pass  # Solo se muestra en preview
 
             # === RECONOCIMIENTO (cada 2s) ===
-            if ahora - t_embedding >= COOLDOWN_EMBEDDING:
+            elif ahora - t_embedding >= COOLDOWN_EMBEDDING:
                 t_embedding = ahora
 
                 embedding = reconocedor.generar_embedding(imagen_rgb, bbox)
-                if embedding is None:
-                    continue
+                if embedding is not None:
+                    nombre, confianza = reconocedor.buscar(embedding)
+                    nombre_actual = nombre
+                    confianza_actual = confianza
 
-                nombre, confianza = reconocedor.buscar(embedding)
-                nombre_actual = nombre
-                confianza_actual = confianza
+                    if nombre:
+                        if ahora - t_evento >= COOLDOWN_EVENTO:
+                            t_evento = ahora
+                            ruta = _guardar_foto(color, "acceso")
+                            cola_eventos.put({
+                                "tipo": "ACCESO_PERMITIDO",
+                                "nombre": nombre,
+                                "confianza": confianza,
+                                "metricas": metricas,
+                                "foto_ruta": ruta,
+                                "frame": color.copy()
+                            })
+                    else:
+                        if ahora - t_evento >= COOLDOWN_EVENTO:
+                            t_evento = ahora
+                            ruta = _guardar_foto(color, "desconocido")
+                            cola_eventos.put({
+                                "tipo": "DESCONOCIDO",
+                                "metricas": metricas,
+                                "foto_ruta": ruta,
+                                "frame": color.copy()
+                            })
 
-                if nombre:
-                    if ahora - t_evento >= COOLDOWN_EVENTO:
-                        t_evento = ahora
-                        ruta = _guardar_foto(color, "acceso")
-                        cola_eventos.put({
-                            "tipo": "ACCESO_PERMITIDO",
-                            "nombre": nombre,
-                            "confianza": confianza,
-                            "metricas": metricas,
-                            "foto_ruta": ruta,
-                            "frame": color.copy()
-                        })
-                else:
-                    if ahora - t_evento >= COOLDOWN_EVENTO:
-                        t_evento = ahora
-                        ruta = _guardar_foto(color, "desconocido")
-                        cola_eventos.put({
-                            "tipo": "DESCONOCIDO",
-                            "metricas": metricas,
-                            "foto_ruta": ruta,
-                            "frame": color.copy()
-                        })
-
-            # Preview reconocimiento
-            vista = _dibujar_preview(
+            # Preview unificado (un solo punto de render)
+            vista = dibujar_preview(
                 color, bbox, es_real, es_dist, motivo, metricas,
-                nombre_actual, confianza_actual, False
+                nombre_actual, confianza_actual, modo_registro.activo
             )
-            cv2.imshow("DepthGuard - Preview", vista)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
+            if mostrar_preview(vista):
                 break
 
             # Recargar caché si se registró alguien nuevo
-            if modo_registro.get("recargar_cache"):
+            if modo_registro.recargar_cache:
                 usuarios = db_manager.obtener_todos_usuarios()
                 reconocedor.recargar_cache(usuarios)
-                modo_registro["recargar_cache"] = False
+                modo_registro.recargar_cache = False
 
     except Exception as e:
         print(f"❌ Error pipeline: {e}")
