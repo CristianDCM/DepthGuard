@@ -92,17 +92,12 @@ if %errorlevel% neq 0 (
 )
 
 :: Instalar el resto de dependencias (excepto pyrealsense2 que se instala aparte)
-echo    → Instalando OpenCV, MediaPipe, FastAPI y demas...
+echo    → Instalando OpenCV, MediaPipe, Supabase y demas...
 pip install numpy==1.24.4 --quiet
 pip install opencv-python==4.8.1.78 --quiet
 pip install mediapipe==0.10.14 --quiet
 pip install face-recognition==1.3.0 --quiet
-pip install fastapi==0.104.1 --quiet
-pip install uvicorn==0.24.0 --quiet
-pip install pydantic==2.5.2 --quiet
-pip install pywebpush==1.14.1 --quiet
-pip install py-vapid==1.9.0 --quiet
-pip install cryptography==41.0.7 --quiet
+pip install supabase==2.15.2 --quiet
 
 :: Instalar pyrealsense2 por separado (puede fallar si no hay SDK)
 echo    → Instalando pyrealsense2 (camara Intel RealSense)...
@@ -146,7 +141,7 @@ echo.
 echo   Para iniciar el sistema, ejecuta: INICIAR.bat
 echo.
 echo   Notas:
-echo   - Edita .env para configurar el modo de camara y credenciales
+echo   - Edita .env y agrega tus credenciales de Supabase
 echo   - Si usas RealSense, cambia MODO_CAMARA=realsense en .env
 echo   - Admin por defecto: admin / admin123
 echo.
