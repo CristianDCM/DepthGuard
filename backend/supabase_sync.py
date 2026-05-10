@@ -106,7 +106,10 @@ def _evento_a_registro(evento: dict, camera_id: str,
             "verification_level": "3D_antispoofing" if camera_type == "3D" else "2D_recognition",
         }
 
-    # Tipos no reconocidos (ej: REGISTRO_EMBEDDING) se ignoran aquí
+    # Otros tipos no se procesan en historial.
+    # REGISTRO_EMBEDDING ya no llega aquí — el pipeline acumula
+    # embeddings directamente en EstadoRegistro y el command_listener
+    # los guarda en la tabla usuarios al completar.
     return None
 
 

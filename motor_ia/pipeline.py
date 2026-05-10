@@ -182,16 +182,15 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
             if modo_registro.activo and es_real:
                 embedding = reconocedor.generar_embedding(imagen_rgb, bbox)
                 if embedding is not None:
-                    cola_eventos.put({
-                        "tipo": "REGISTRO_EMBEDDING",
-                        "embedding": embedding,
-                        "angulo": angulo,
-                        "frame": color.copy()
-                    })
+                    # Acumular embedding real en el estado de registro
+                    modo_registro.agregar_embedding(embedding)
+                    paso = len(modo_registro.embeddings)
+                    modo_registro.paso = paso
+                    print(f"   📸 Registro: embedding {paso}/5 capturado (ángulo: {direccion})")
                 # Preview en modo registro
                 vista = dibujar_preview(
                     color, bbox, es_real, es_dist, motivo, metricas,
-                    None, 0, True
+                    modo_registro.nombre, 0, True
                 )
                 if mostrar_preview(vista):
                     break

@@ -2,10 +2,11 @@
 DEPTHGUARD - Punto de entrada (Nodo Edge).
 Ejecutar: python iniciar.py
 
-Arranca 3 hilos:
+Arranca 4 hilos:
   1. Pipeline IA — cámara → detección → anti-spoofing → reconocimiento
   2. Sync Supabase — lee la cola de eventos y los envía a Supabase Cloud
   3. Heartbeat — actualiza estado_sistema.ultimo_heartbeat cada 30s
+  4. Command Listener — polling de comandos del frontend (registro, etc.)
 """
 
 import warnings
@@ -29,6 +30,7 @@ from motor_ia.pipeline import ejecutar_pipeline
 from motor_ia.estado_registro import EstadoRegistro
 from backend.supabase_sync import iniciar_sync
 from backend.heartbeat import iniciar_heartbeat
+from backend.command_listener import iniciar_command_listener
 
 os.makedirs(CAPTURAS_DIR, exist_ok=True)
 
@@ -76,10 +78,19 @@ hilo_heartbeat = threading.Thread(
 )
 hilo_heartbeat.start()
 
+# Hilo 4: Command Listener (polling de comandos del frontend)
+hilo_commands = threading.Thread(
+    target=iniciar_command_listener,
+    args=(modo_registro,),
+    daemon=True
+)
+hilo_commands.start()
+
 print()
 print(f"📷 Cámara: {MODO_CAMARA} ({camera_id} / {camera_type})")
 print(f"☁️  Supabase: {SUPABASE_URL[:40]}...")
 print(f"💓 Heartbeat: cada 30s")
+print(f"📡 Command Listener: polling cada 2s")
 print()
 print("Presiona Ctrl+C para detener")
 print()
