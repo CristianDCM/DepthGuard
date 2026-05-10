@@ -21,7 +21,10 @@ class DetectorFaceMesh:
         bbox = (x, y, x2, y2) o None
         """
         alto, ancho = imagen_rgb.shape[:2]
+        # Optimización oficial MediaPipe: evita copia interna del array
+        imagen_rgb.flags.writeable = False
         resultado = self.face_mesh.process(imagen_rgb)
+        imagen_rgb.flags.writeable = True
 
         if not resultado.multi_face_landmarks:
             return False, None, 0, "ninguno"

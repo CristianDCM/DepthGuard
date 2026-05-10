@@ -17,6 +17,11 @@ import queue
 import threading
 import time
 
+# Fix encoding para consola Windows (cp1252 no soporta emojis)
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from config.settings import CAPTURAS_DIR, MODO_CAMARA, SUPABASE_URL

@@ -2,24 +2,34 @@
 
 import cv2
 import numpy as np
-import mediapipe as mp
 
 
 class CamaraSimulada:
 
     def __init__(self):
-        self.webcam = cv2.VideoCapture(0)
+        self.webcam = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        if not self.webcam.isOpened():
+            # Fallback sin DirectShow
+            self.webcam = cv2.VideoCapture(0)
         if not self.webcam.isOpened():
             raise RuntimeError("No se detectó webcam")
 
-        self.detector = mp.solutions.face_detection.FaceDetection(
-            model_selection=0,
-            min_detection_confidence=0.5
-        )
+        # Forzar resolución 640x480 para rendimiento
+        self.webcam.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.webcam.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        # Reducir buffer interno de la webcam a 1 frame (menor latencia)
+        self.webcam.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
         self.modo = "REAL"
+        # Cache de profundidad para reusar entre frames sin rostro
+        self._prof_cache = None
+        self._prof_shape = None
+        # Pre-computar malla de coordenadas (se ajusta al primer frame)
+        self._mesh_y = None
+        self._mesh_x = None
 
     def conectar(self):
-        print("✅ Cámara SIMULADA conectada (webcam)")
+        print("✅ Cámara SIMULADA conectada (webcam 640x480)")
 
     def obtener_frames(self):
         ret, frame = self.webcam.read()
@@ -27,6 +37,11 @@ class CamaraSimulada:
             return None, None
 
         alto, ancho = frame.shape[:2]
+
+        # Inicializar mesh una sola vez
+        if self._mesh_y is None or self._prof_shape != (alto, ancho):
+            self._prof_shape = (alto, ancho)
+            self._mesh_y, self._mesh_x = np.mgrid[0:alto, 0:ancho]
 
         if self.modo == "REAL":
             prof = self._profundidad_real(frame, alto, ancho)
@@ -37,29 +52,42 @@ class CamaraSimulada:
 
         return frame, prof
 
-    def _profundidad_real(self, frame, alto, ancho):
+    def actualizar_profundidad(self, bbox):
+        """Actualiza la profundidad sintética usando un bbox ya detectado por el pipeline.
+        Llamar desde pipeline.py para evitar correr un segundo detector."""
+        if bbox is None or self._prof_shape is None:
+            return
+        alto, ancho = self._prof_shape
+        x, y, x2, y2 = bbox
+        w = x2 - x
+        h = y2 - y
+        if w < 10 or h < 10:
+            return
+
+        cx, cy = x + w // 2, y + h // 2
+
+        # Vectorizado: generar profundidad 3D solo en la región del rostro
+        reg_y = self._mesh_y[y:y2, x:x2]
+        reg_x = self._mesh_x[y:y2, x:x2]
+
+        dy = np.abs(reg_y - cy).astype(np.float32) / max(h / 2, 1)
+        dx = np.abs(reg_x - cx).astype(np.float32) / max(w / 2, 1)
+
+        depth_region = (670 + (dx**2 + dy**2) * 60).astype(np.uint16)
+        # Agregar ruido mínimo (vectorizado)
+        noise = np.random.randint(-3, 4, depth_region.shape, dtype=np.int16)
+        depth_region = (depth_region.astype(np.int16) + noise).clip(0, 65535).astype(np.uint16)
+
         prof = np.full((alto, ancho), 1000, dtype=np.uint16)
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        res = self.detector.process(rgb)
+        prof[y:y2, x:x2] = depth_region
+        self._prof_cache = prof
 
-        if res.detections:
-            for det in res.detections:
-                bbox = det.location_data.relative_bounding_box
-                x = max(0, int(bbox.xmin * ancho))
-                y = max(0, int(bbox.ymin * alto))
-                w = int(bbox.width * ancho)
-                h = int(bbox.height * alto)
-                cx, cy = x + w // 2, y + h // 2
-
-                for py in range(y, min(alto, y + h)):
-                    for px in range(x, min(ancho, x + w)):
-                        dy = abs(py - cy) / max(h / 2, 1)
-                        dx = abs(px - cx) / max(w / 2, 1)
-                        prof[py, px] = int(
-                            670 + (dx**2 + dy**2) * 60
-                            + np.random.randint(-3, 3)
-                        )
-        return prof
+    def _profundidad_real(self, frame, alto, ancho):
+        """Retorna la profundidad cacheada (generada por actualizar_profundidad).
+        Si aún no hay cache, retorna fondo plano."""
+        if self._prof_cache is not None:
+            return self._prof_cache
+        return np.full((alto, ancho), 1000, dtype=np.uint16)
 
     def _profundidad_plana(self, alto, ancho):
         ruido = np.random.randint(-2, 2, (alto, ancho))
@@ -74,6 +102,5 @@ class CamaraSimulada:
         print(f"   Modo cámara: {modo}")
 
     def cerrar(self):
-        self.detector.close()
         self.webcam.release()
         print("📷 Cámara simulada cerrada")

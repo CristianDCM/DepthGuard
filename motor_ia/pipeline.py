@@ -22,13 +22,17 @@ from config.settings import (
     COOLDOWN_EVENTO, CAPTURAS_DIR
 )
 
+# FPS objetivo para el pipeline (evita consumir 100% CPU)
+TARGET_FPS = 20
+MIN_FRAME_TIME = 1.0 / TARGET_FPS
+
 
 def _guardar_foto(imagen, prefijo):
     """Guarda captura y retorna ruta relativa."""
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     nombre = f"{prefijo}_{timestamp}.jpg"
     ruta_completa = os.path.join(CAPTURAS_DIR, nombre)
-    cv2.imwrite(ruta_completa, imagen)
+    cv2.imwrite(ruta_completa, imagen, [cv2.IMWRITE_JPEG_QUALITY, 85])
     return f"/capturas/{nombre}"
 
 
@@ -69,6 +73,9 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
     antispoofing = VerificadorAntiSpoofing()
     reconocedor = ReconocedorFacial()
 
+    # Detectar si es cámara simulada para optimizar profundidad
+    _es_simulada = hasattr(camara, 'actualizar_profundidad')
+
     # Conectar cámara con reintentos
     intentos = 0
     while True:
@@ -98,34 +105,55 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
     nombre_actual = None
     confianza_actual = 0
 
+    # FPS counter para debug
+    _fps_count = 0
+    _fps_timer = time.time()
+
     print("🟢 Pipeline IA activo")
     print("   📺 Ventana de preview abierta (presiona 'q' para cerrar)")
 
     try:
         while True:
+            frame_start = time.time()
+
             color, profundidad = camara.obtener_frames()
 
             if color is None:
-                time.sleep(0.1)
+                time.sleep(0.05)
                 continue
 
             ahora = time.time()
+
+            # Redimensionar si la cámara entregó un frame más grande que 640x480
+            h_orig, w_orig = color.shape[:2]
+            if w_orig > 640:
+                scale = 640 / w_orig
+                new_h = int(h_orig * scale)
+                color = cv2.resize(color, (640, new_h), interpolation=cv2.INTER_AREA)
+                if profundidad is not None:
+                    profundidad = cv2.resize(profundidad, (640, new_h), interpolation=cv2.INTER_NEAREST)
+
             imagen_rgb = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
 
             # === DETECCIÓN (cada frame) ===
             encontrada, bbox, angulo, direccion = detector.detectar(imagen_rgb)
 
             if not encontrada:
-                # Mostrar frame sin detección
-                vista = color.copy()
-                cv2.putText(vista, "DEPTHGUARD - Preview", (10, 25),
+                # Mostrar frame sin detección (reusar frame directamente)
+                cv2.putText(color, "DEPTHGUARD - Preview", (10, 25),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                cv2.putText(vista, "Sin rostro detectado", (10, 55),
+                cv2.putText(color, "Sin rostro detectado", (10, 55),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 100), 1)
-                if mostrar_preview(vista):
+                if mostrar_preview(color):
                     break
-                time.sleep(0.05)
+                # Limitar FPS cuando no hay rostro (menos urgencia)
+                _dormir_hasta_fps(frame_start, MIN_FRAME_TIME * 2)
                 continue
+
+            # Si cámara simulada: generar profundidad a partir del bbox ya detectado
+            if _es_simulada and bbox is not None:
+                camara.actualizar_profundidad(bbox)
+                profundidad = camara._prof_cache if camara._prof_cache is not None else profundidad
 
             # === ANTI-SPOOFING (cada 0.3s) ===
             if ahora - t_spoofing >= COOLDOWN_ANTISPOOFING:
@@ -145,6 +173,7 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
                 )
                 if mostrar_preview(vista):
                     break
+                _dormir_hasta_fps(frame_start, MIN_FRAME_TIME)
                 continue
 
             es_real, es_dist, motivo, metricas = spoofing_cache
@@ -166,6 +195,7 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
                 )
                 if mostrar_preview(vista):
                     break
+                _dormir_hasta_fps(frame_start, MIN_FRAME_TIME)
                 continue
 
             # === FRAUDE ===
@@ -219,7 +249,7 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
                                 "frame": color.copy()
                             })
 
-            # Preview unificado (un solo punto de render)
+            # Preview unificado (un solo punto de render, sin .copy())
             vista = dibujar_preview(
                 color, bbox, es_real, es_dist, motivo, metricas,
                 nombre_actual, confianza_actual, modo_registro.activo
@@ -234,6 +264,16 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
                 modo_registro.recargar_cache = False
                 print(f"   🔄 Caché recargada: {len(usuarios)} usuarios")
 
+            # FPS debug (cada 3 segundos)
+            _fps_count += 1
+            if ahora - _fps_timer >= 3.0:
+                fps = _fps_count / (ahora - _fps_timer)
+                _fps_count = 0
+                _fps_timer = ahora
+
+            # Limitar FPS para no saturar CPU
+            _dormir_hasta_fps(frame_start, MIN_FRAME_TIME)
+
     except Exception as e:
         print(f"❌ Error pipeline: {e}")
         import traceback
@@ -243,3 +283,10 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
         cv2.destroyAllWindows()
         detector.cerrar()
         camara.cerrar()
+
+
+def _dormir_hasta_fps(frame_start, target_time):
+    """Duerme lo necesario para no exceder el FPS objetivo."""
+    elapsed = time.time() - frame_start
+    if elapsed < target_time:
+        time.sleep(target_time - elapsed)

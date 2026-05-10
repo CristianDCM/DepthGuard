@@ -15,7 +15,7 @@ class ReconocedorFacial:
         x, y, x2, y2 = bbox
         ubicacion = [(y, x2, y2, x)]
 
-        encodings = face_recognition.face_encodings(imagen_rgb, ubicacion)
+        encodings = face_recognition.face_encodings(imagen_rgb, ubicacion, model="small")
 
         if encodings:
             return encodings[0]
