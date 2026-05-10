@@ -221,7 +221,7 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
 
                 embedding = reconocedor.generar_embedding(imagen_rgb, bbox)
                 if embedding is not None:
-                    nombre, confianza = reconocedor.buscar(embedding)
+                    nombre, confianza, usuario_id = reconocedor.buscar(embedding)
                     nombre_actual = nombre
                     confianza_actual = confianza
 
@@ -232,6 +232,7 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
                             cola_eventos.put({
                                 "tipo": "ACCESO_PERMITIDO",
                                 "nombre": nombre,
+                                "usuario_id": usuario_id,
                                 "confianza": confianza,
                                 "metricas": metricas,
                                 "foto_ruta": ruta,

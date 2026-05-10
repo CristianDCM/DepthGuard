@@ -22,9 +22,10 @@ class ReconocedorFacial:
         return None
 
     def buscar(self, embedding):
-        """Busca en la caché."""
+        """Busca en la caché. Retorna (nombre, confianza, usuario_id)."""
         mejor_dist = float("inf")
         mejor_nombre = None
+        mejor_id = None
         emb = np.array(embedding)
 
         for item in self.cache:
@@ -32,11 +33,12 @@ class ReconocedorFacial:
             if dist < TOLERANCIA_FACIAL and dist < mejor_dist:
                 mejor_dist = dist
                 mejor_nombre = item["nombre"]
+                mejor_id = item["id"]
 
         if mejor_nombre:
-            return mejor_nombre, round((1 - mejor_dist) * 100, 1)
+            return mejor_nombre, round((1 - mejor_dist) * 100, 1), mejor_id
 
-        return None, 0
+        return None, 0, None
 
     def cargar_cache(self, usuarios):
         """Carga embeddings de usuarios a memoria."""
@@ -52,6 +54,7 @@ class ReconocedorFacial:
 
             for emb in lista:
                 self.cache.append({
+                    "id": usuario.get("id"),
                     "nombre": usuario["nombre"],
                     "embedding": np.array(emb)
                 })
