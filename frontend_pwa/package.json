@@ -1,9 +1,0 @@
-{
-  "name": "depthguard-pwa",
-  "version": "1.0.0",
-  "description": "DepthGuard - Frontend PWA para control de acceso biométrico 3D",
-  "private": true,
-  "dependencies": {
-    "@capacitor/core": "^6.0.0"
-  }
-}
