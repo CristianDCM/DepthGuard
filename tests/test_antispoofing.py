@@ -45,6 +45,37 @@ class TestAntiSpoofing(unittest.TestCase):
         )
         self.assertTrue(es_real)
 
+    def test_campos_metricas_usan_nombres_correctos(self):
+        """Las métricas deben usar rango_3d y pixeles_validos (no rango/pixeles)."""
+        mapa = np.full((480, 640), 1000, dtype=np.uint16)
+        cx, cy = 200, 200
+        for y in range(100, 300):
+            for x in range(100, 300):
+                dy = abs(y - cy) / 100.0
+                dx = abs(x - cx) / 100.0
+                mapa[y, x] = int(670 + (dx**2 + dy**2) * 600
+                                 + np.random.randint(-30, 30))
+        _, _, _, metricas = self.verificador.verificar(mapa, self.bbox)
+        # Campos esperados por el frontend
+        self.assertIn("varianza", metricas)
+        self.assertIn("distancia", metricas)
+        self.assertIn("rango_3d", metricas)
+        self.assertIn("pixeles_validos", metricas)
+        # Campos legacy NO deben existir
+        self.assertNotIn("rango", metricas)
+        self.assertNotIn("pixeles", metricas)
+
+    def test_pixeles_validos_normalizado_0_1(self):
+        """pixeles_validos debe estar en escala 0.0-1.0 (el frontend multiplica por 100)."""
+        mapa = np.full((480, 640), 700, dtype=np.uint16)
+        for y in range(100, 300):
+            for x in range(100, 300):
+                mapa[y, x] = 700 + np.random.randint(-5, 5)
+        _, _, _, metricas = self.verificador.verificar(mapa, self.bbox)
+        if "pixeles_validos" in metricas:
+            self.assertGreaterEqual(metricas["pixeles_validos"], 0.0)
+            self.assertLessEqual(metricas["pixeles_validos"], 1.0)
+
     def test_distancia_muy_lejos(self):
         """Una persona muy lejos debe marcarse como distancia."""
         # 20000 / 10 = 2000cm → muy lejos, fuera del rango 25-150cm
