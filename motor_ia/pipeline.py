@@ -9,12 +9,14 @@ import cv2
 import queue
 import datetime
 import os
+import json
 
 from motor_ia.camara.factory import crear_camara
 from motor_ia.deteccion.face_mesh import DetectorFaceMesh
 from motor_ia.antispoofing.verificador_3d import VerificadorAntiSpoofing
 from motor_ia.reconocimiento.embedding_generator import ReconocedorFacial
 from motor_ia.visualizacion import dibujar_preview, mostrar_preview
+from backend.supabase_cliente import obtener_cliente
 from config.settings import (
     COOLDOWN_EMBEDDING, COOLDOWN_ANTISPOOFING,
     COOLDOWN_EVENTO, CAPTURAS_DIR
@@ -30,10 +32,35 @@ def _guardar_foto(imagen, prefijo):
     return f"/capturas/{nombre}"
 
 
-def ejecutar_pipeline(cola_eventos, modo_registro, db_manager):
+def _cargar_usuarios_supabase():
+    """Carga usuarios desde Supabase y los formatea para el reconocedor."""
+    try:
+        supabase = obtener_cliente()
+        resp = supabase.table("usuarios").select(
+            "id, nombre, embeddings_json, num_angulos, activo"
+        ).eq("activo", True).execute()
+
+        usuarios = []
+        for row in resp.data:
+            emb = row.get("embeddings_json")
+            if emb:
+                usuarios.append({
+                    "id": row["id"],
+                    "nombre": row["nombre"],
+                    "embeddings": emb if isinstance(emb, list) else json.loads(emb),
+                    "num_angulos": row.get("num_angulos", 0),
+                })
+        return usuarios
+    except Exception as e:
+        print(f"⚠️ Error cargando usuarios de Supabase: {e}")
+        return []
+
+
+def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
     """
     Bucle principal. Corre en un hilo separado.
     modo_registro: instancia de EstadoRegistro (thread-safe).
+    db_manager: legacy, ya no se usa (los usuarios se cargan de Supabase).
     """
 
     # Crear componentes
@@ -54,9 +81,10 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager):
             print(f"❌ Cámara: {e}. Reintento en {espera}s...")
             time.sleep(espera)
 
-    # Cargar usuarios
-    usuarios = db_manager.obtener_todos_usuarios()
+    # Cargar usuarios desde Supabase
+    usuarios = _cargar_usuarios_supabase()
     reconocedor.cargar_cache(usuarios)
+    print(f"   👥 {len(usuarios)} usuarios cargados desde Supabase")
 
     # Timers
     t_embedding = 0
@@ -201,9 +229,10 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager):
 
             # Recargar caché si se registró alguien nuevo
             if modo_registro.recargar_cache:
-                usuarios = db_manager.obtener_todos_usuarios()
+                usuarios = _cargar_usuarios_supabase()
                 reconocedor.recargar_cache(usuarios)
                 modo_registro.recargar_cache = False
+                print(f"   🔄 Caché recargada: {len(usuarios)} usuarios")
 
     except Exception as e:
         print(f"❌ Error pipeline: {e}")

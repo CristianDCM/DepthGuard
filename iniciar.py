@@ -1,6 +1,11 @@
 """
-DEPTHGUARD - Punto de entrada único.
+DEPTHGUARD - Punto de entrada (Nodo Edge).
 Ejecutar: python iniciar.py
+
+Arranca 3 hilos:
+  1. Pipeline IA — cámara → detección → anti-spoofing → reconocimiento
+  2. Sync Supabase — lee la cola de eventos y los envía a Supabase Cloud
+  3. Heartbeat — actualiza estado_sistema.ultimo_heartbeat cada 30s
 """
 
 import warnings
@@ -10,41 +15,74 @@ import os
 import sys
 import queue
 import threading
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config.settings import PORT, CAPTURAS_DIR
-from backend.base_datos import BaseDatos
+from config.settings import CAPTURAS_DIR, MODO_CAMARA, SUPABASE_URL
 from motor_ia.pipeline import ejecutar_pipeline
 from motor_ia.estado_registro import EstadoRegistro
+from backend.supabase_sync import iniciar_sync
+from backend.heartbeat import iniciar_heartbeat
 
 os.makedirs(CAPTURAS_DIR, exist_ok=True)
 
 print()
 print("=" * 55)
-print("  🛡️  DEPTHGUARD")
+print("  🛡️  DEPTHGUARD — Nodo Edge")
 print("  Sistema de Control de Acceso Biométrico 3D")
 print("=" * 55)
 print()
 
-db = BaseDatos()
-print("✅ Base de datos lista")
+# Verificar configuración de Supabase
+if not SUPABASE_URL:
+    print("❌ SUPABASE_URL no configurada en .env")
+    print("   Copia .env.example como .env y agrega tus credenciales")
+    sys.exit(1)
 
+# Cola de eventos: Pipeline IA → Sync Supabase
 cola_eventos = queue.Queue()
 modo_registro = EstadoRegistro()
 
+# Determinar tipo de cámara
+camera_id = "entrada_principal"
+camera_type = "3D" if MODO_CAMARA == "realsense" else "2D"
+
+# Hilo 1: Pipeline IA
 hilo_ia = threading.Thread(
     target=ejecutar_pipeline,
-    args=(cola_eventos, modo_registro, db),
+    args=(cola_eventos, modo_registro, None),  # db=None, ya no se usa SQLite
     daemon=True
 )
 hilo_ia.start()
 
-print(f"🌐 Servidor: http://localhost:{PORT}")
+# Hilo 2: Sync Supabase (store-and-forward)
+hilo_sync = threading.Thread(
+    target=iniciar_sync,
+    args=(cola_eventos, camera_id, camera_type),
+    daemon=True
+)
+hilo_sync.start()
+
+# Hilo 3: Heartbeat
+hilo_heartbeat = threading.Thread(
+    target=iniciar_heartbeat,
+    daemon=True
+)
+hilo_heartbeat.start()
+
+print()
+print(f"📷 Cámara: {MODO_CAMARA} ({camera_id} / {camera_type})")
+print(f"☁️  Supabase: {SUPABASE_URL[:40]}...")
+print(f"💓 Heartbeat: cada 30s")
+print()
+print("Presiona Ctrl+C para detener")
 print()
 
-import uvicorn
-from backend.servidor import crear_app
+# Mantener el proceso vivo (los hilos son daemon)
+try:
+    while True:
+        time.sleep(1)
+except KeyboardInterrupt:
+    print("\n🛑 DepthGuard detenido")
 
-app = crear_app(cola_eventos, modo_registro, db)
-uvicorn.run(app, host="0.0.0.0", port=PORT, log_level="warning")
