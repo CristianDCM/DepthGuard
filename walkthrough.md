@@ -95,7 +95,7 @@ Endpoints:
 | Ruta | Método | Función |
 |---|---|---|
 | `/` | GET | Estado del sistema |
-| `/api/health` | GET | Health check (usado por Docker) |
+| `/api/health` | GET | Health check |
 | `/login` | POST | Login admin |
 | `/usuarios` | GET | Lista usuarios registrados |
 | `/usuarios/{id}` | DELETE | Eliminar usuario |
@@ -138,41 +138,6 @@ python iniciar.py
 ```
 
 Esto arranca la cámara + IA + servidor en `http://localhost:8000`
-
----
-
-## Docker
-
-El proyecto incluye soporte para contenedores Docker.
-
-### Archivos de configuración
-
-| Archivo | Propósito |
-|---|---|
-| [Dockerfile](file:///c:/Users/WinterOS/Desktop/DepthGuard/Dockerfile) | Imagen basada en `python:3.10-slim` con dependencias del sistema (cmake, OpenCV, dlib) |
-| [docker-compose.yml](file:///c:/Users/WinterOS/Desktop/DepthGuard/docker-compose.yml) | Orquestación: puertos, volúmenes, variables de entorno, healthcheck |
-| [.dockerignore](file:///c:/Users/WinterOS/Desktop/DepthGuard/.dockerignore) | Excluye `venv/`, `.git/`, `node_modules/`, etc. de la imagen |
-
-### Decisiones de diseño
-
-- **`pyrealsense2` se excluye** de la instalación Docker porque el contenedor no tiene acceso al hardware de la cámara RealSense
-- **Modo forzado `simulada`** — la variable `MODO_CAMARA` se sobreescribe a `simulada` dentro del contenedor
-- **Volúmenes para datos** — la base de datos (`database.db`) y capturas de fotos se persisten en `./data/` fuera del contenedor
-- **Healthcheck** — Docker verifica el estado del contenedor llamando a `/api/health` cada 30 segundos
-- **Endpoint `/api/health`** — agregado en [servidor.py](file:///c:/Users/WinterOS/Desktop/DepthGuard/backend/servidor.py) para soportar el healthcheck
-
-### Ejecución
-
-```bash
-# Construir y levantar
-docker-compose up --build
-
-# En segundo plano
-docker-compose up -d
-
-# Detener
-docker-compose down
-```
 
 ---
 
