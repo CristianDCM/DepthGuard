@@ -4,8 +4,13 @@ Sincronización Edge → Supabase Cloud.
 Lee eventos de la cola del Pipeline IA e inserta en Supabase.
 Implementa Store-and-Forward: si Supabase no responde, los eventos
 se acumulan en un buffer local y se reintentan automáticamente.
+
+Las fotos de eventos se suben a Supabase Storage (bucket "capturas")
+y se reemplazan las rutas locales por URLs públicas accesibles desde
+el frontend en Vercel.
 """
 
+import os
 import queue
 import time
 import datetime
@@ -13,6 +18,7 @@ import threading
 import collections
 
 from backend.supabase_cliente import obtener_cliente
+from config.settings import CAPTURAS_DIR
 
 # Buffer local para store-and-forward (tolerancia a cortes de internet)
 _buffer_pendientes = collections.deque(maxlen=500)
@@ -20,6 +26,9 @@ _lock_buffer = threading.Lock()
 
 # Intervalo entre reintentos del buffer (segundos)
 _REINTENTO_INTERVALO = 10
+
+# Nombre del bucket en Supabase Storage
+_STORAGE_BUCKET = "capturas"
 
 
 def iniciar_sync(cola_eventos: queue.Queue, camera_id: str = "entrada_principal",
@@ -46,6 +55,7 @@ def iniciar_sync(cola_eventos: queue.Queue, camera_id: str = "entrada_principal"
 
         registro = _evento_a_registro(evento, camera_id, camera_type)
         if registro:
+            _subir_foto_si_existe(supabase, registro)
             _enviar_a_supabase(supabase, registro)
 
 
@@ -100,6 +110,49 @@ def _evento_a_registro(evento: dict, camera_id: str,
     return None
 
 
+def _subir_foto_si_existe(supabase, registro: dict):
+    """
+    Si el registro tiene foto_url con ruta local, sube la imagen
+    a Supabase Storage y reemplaza la ruta por la URL pública.
+    """
+    foto_ruta_local = registro.get("foto_url")
+    if not foto_ruta_local or foto_ruta_local.startswith("http"):
+        # Ya es URL pública (reintento) o no hay foto
+        return
+
+    # La ruta local viene como "/capturas/fraude_20260510_143000.jpg"
+    nombre_archivo = os.path.basename(foto_ruta_local)
+    ruta_completa = os.path.join(CAPTURAS_DIR, nombre_archivo)
+
+    if not os.path.exists(ruta_completa):
+        print(f"[Sync] Foto no encontrada: {ruta_completa}")
+        registro["foto_url"] = None
+        return
+
+    try:
+        with open(ruta_completa, "rb") as f:
+            supabase.storage.from_(_STORAGE_BUCKET).upload(
+                path=nombre_archivo,
+                file=f,
+                file_options={"content-type": "image/jpeg"}
+            )
+
+        url_publica = supabase.storage.from_(_STORAGE_BUCKET).get_public_url(
+            nombre_archivo
+        )
+        registro["foto_url"] = url_publica
+    except Exception as e:
+        # Si el archivo ya existe en Storage (reintento con mismo nombre)
+        if "Duplicate" in str(e) or "already exists" in str(e):
+            url_publica = supabase.storage.from_(_STORAGE_BUCKET).get_public_url(
+                nombre_archivo
+            )
+            registro["foto_url"] = url_publica
+        else:
+            print(f"[Sync] Error subiendo foto a Storage: {e}")
+            # Dejar la ruta local; se reintentará con el buffer
+
+
 def _enviar_a_supabase(supabase, registro: dict):
     """Inserta un registro en la tabla historial. Si falla, lo guarda en buffer."""
     try:
@@ -129,6 +182,8 @@ def _reintento_loop():
         enviados = 0
         for registro in pendientes:
             try:
+                # Reintentar subir la foto si aún es ruta local
+                _subir_foto_si_existe(supabase, registro)
                 supabase.table("historial").insert(registro).execute()
                 enviados += 1
             except Exception:
