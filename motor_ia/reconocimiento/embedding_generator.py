@@ -36,9 +36,9 @@ class ReconocedorFacial:
                 mejor_id = item["id"]
 
         if mejor_nombre:
-            return mejor_nombre, round((1 - mejor_dist) * 100, 1), mejor_id
+            return mejor_nombre, round(1 - mejor_dist, 4), mejor_id
 
-        return None, 0, None
+        return None, 0.0, None
 
     def cargar_cache(self, usuarios):
         """Carga embeddings de usuarios a memoria."""
