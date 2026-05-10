@@ -23,7 +23,7 @@ def dibujar_preview(frame, bbox, es_real, es_dist, motivo, metricas,
             etiqueta = motivo
         elif nombre_reconocido:
             color_bbox = (0, 255, 0)  # Verde - reconocido
-            etiqueta = f"{nombre_reconocido} ({confianza}%)"
+            etiqueta = f"{nombre_reconocido} ({confianza * 100:.1f}%)"
         elif es_real:
             color_bbox = (0, 255, 255)  # Amarillo - real pero no reconocido
             etiqueta = "Persona no registrada"
@@ -48,8 +48,8 @@ def dibujar_preview(frame, bbox, es_real, es_dist, motivo, metricas,
                 textos.append(f"Dist: {metricas['distancia']}cm")
             if "varianza" in metricas:
                 textos.append(f"Var: {metricas['varianza']}")
-            if "rango" in metricas:
-                textos.append(f"Rango: {metricas['rango']}")
+            if "rango_3d" in metricas:
+                textos.append(f"Rango: {metricas['rango_3d']}")
             if "direccion" in metricas:
                 textos.append(f"Dir: {metricas['direccion']}")
 

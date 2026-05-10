@@ -43,8 +43,8 @@ class VerificadorAntiSpoofing:
         metricas = {
             "varianza": round(varianza, 2),
             "distancia": round(distancia, 1),
-            "rango": round(rango, 1),
-            "pixeles": round(porcentaje * 100, 1)
+            "rango_3d": round(rango, 1),
+            "pixeles_validos": round(porcentaje, 3)
         }
 
         if porcentaje < MIN_PIXELES_VALIDOS:
