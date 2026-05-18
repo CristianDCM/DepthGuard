@@ -161,6 +161,26 @@ def _enviar_a_supabase(supabase, registro: dict):
     try:
         supabase.table("historial").insert(registro).execute()
     except Exception as e:
+        error_str = str(e)
+
+        # FK violation: usuario fue eliminado desde el frontend
+        # Limpiar usuario_id y reintentar para no perder el evento
+        if "23503" in error_str or "foreign key" in error_str.lower():
+            print(f"[Sync] ⚠️ Usuario eliminado — limpiando referencia y reintentando")
+            registro["usuario_id"] = None
+            registro["nombre"] = f"{registro.get('nombre', '?')} (eliminado)"
+
+            # Señalar al pipeline que recargue la caché inmediatamente
+            from motor_ia.pipeline import cache_invalidada
+            cache_invalidada.set()
+
+            try:
+                supabase.table("historial").insert(registro).execute()
+                print(f"[Sync] ✅ Evento guardado sin usuario_id")
+                return
+            except Exception as e2:
+                print(f"[Sync] Error en reintento sin FK: {e2}")
+
         print(f"[Sync] Error enviando a Supabase: {e}")
         with _lock_buffer:
             _buffer_pendientes.append(registro)
@@ -189,7 +209,18 @@ def _reintento_loop():
                 _subir_foto_si_existe(supabase, registro)
                 supabase.table("historial").insert(registro).execute()
                 enviados += 1
-            except Exception:
+            except Exception as e:
+                error_str = str(e)
+                # FK violation en reintento: limpiar y reintentar una vez
+                if "23503" in error_str or "foreign key" in error_str.lower():
+                    registro["usuario_id"] = None
+                    registro["nombre"] = f"{registro.get('nombre', '?')} (eliminado)"
+                    try:
+                        supabase.table("historial").insert(registro).execute()
+                        enviados += 1
+                        continue
+                    except Exception:
+                        pass
                 # Devolver al buffer si sigue fallando
                 with _lock_buffer:
                     _buffer_pendientes.append(registro)

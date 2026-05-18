@@ -10,6 +10,7 @@ import queue
 import datetime
 import os
 import json
+import threading
 
 from motor_ia.camara.factory import crear_camara
 from motor_ia.deteccion.face_mesh import DetectorFaceMesh
@@ -29,6 +30,13 @@ MIN_FRAME_TIME = 1.0 / TARGET_FPS
 
 # Tiempo que la persona debe mantener la pose antes de capturar (segundos)
 TIEMPO_ESTABILIZACION = 1.0
+
+# Intervalo de recarga automática de caché (segundos)
+# Detecta eliminaciones de usuarios hechas desde el frontend
+CACHE_REFRESH_INTERVAL = 60
+
+# Evento global para forzar recarga de caché desde otros hilos (ej: sync)
+cache_invalidada = threading.Event()
 
 
 def _guardar_foto(imagen, prefijo):
@@ -101,6 +109,7 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
     t_embedding = 0
     t_spoofing = 0
     t_evento = 0
+    t_cache_refresh = time.time()  # Para recarga periódica de caché
 
     # Cache
     spoofing_cache = None
@@ -312,7 +321,27 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
                 usuarios = _cargar_usuarios_supabase()
                 reconocedor.recargar_cache(usuarios)
                 modo_registro.recargar_cache = False
-                print(f"   🔄 Caché recargada: {len(usuarios)} usuarios")
+                t_cache_refresh = ahora  # Reset timer
+                print(f"   🔄 Caché recargada (registro): {len(usuarios)} usuarios")
+
+            # Recargar caché si fue invalidada externamente (ej: FK error en sync)
+            if cache_invalidada.is_set():
+                cache_invalidada.clear()
+                usuarios = _cargar_usuarios_supabase()
+                reconocedor.recargar_cache(usuarios)
+                t_cache_refresh = ahora
+                nombre_actual = None  # Limpiar nombre reconocido
+                confianza_actual = 0
+                print(f"   🔄 Caché recargada (invalidación externa): {len(usuarios)} usuarios")
+
+            # Recarga periódica automática cada 60s
+            # Detecta eliminaciones de usuarios desde el frontend
+            if ahora - t_cache_refresh >= CACHE_REFRESH_INTERVAL:
+                t_cache_refresh = ahora
+                usuarios = _cargar_usuarios_supabase()
+                reconocedor.recargar_cache(usuarios)
+                nombre_actual = None
+                confianza_actual = 0
 
             # FPS debug (cada 3 segundos)
             _fps_count += 1
