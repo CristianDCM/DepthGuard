@@ -29,7 +29,7 @@ from config.settings import CAPTURAS_DIR, MODO_CAMARA, SUPABASE_URL
 from motor_ia.pipeline import ejecutar_pipeline
 from motor_ia.estado_registro import EstadoRegistro
 from backend.supabase_sync import iniciar_sync
-from backend.heartbeat import iniciar_heartbeat
+from backend.heartbeat import iniciar_heartbeat, apagar_camaras
 from backend.command_listener import iniciar_command_listener
 
 os.makedirs(CAPTURAS_DIR, exist_ok=True)
@@ -105,5 +105,6 @@ try:
     while True:
         time.sleep(1)
 except KeyboardInterrupt:
-    print("\n🛑 DepthGuard detenido")
-
+    print("\n⏹️  Apagando DepthGuard...")
+    apagar_camaras()
+    print("🛑 DepthGuard detenido")
