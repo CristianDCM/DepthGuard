@@ -52,8 +52,14 @@ cola_eventos = queue.Queue()
 modo_registro = EstadoRegistro()
 
 # Determinar tipo de cámara
-camera_id = "entrada_principal"
-camera_type = "3D" if MODO_CAMARA == "realsense" else "2D"
+# RealSense → entrada_principal (3D anti-spoofing)
+# Webcam    → entrada_secundaria (2D reconocimiento)
+if MODO_CAMARA == "realsense":
+    camera_id = "entrada_principal"
+    camera_type = "3D"
+else:
+    camera_id = "entrada_secundaria"
+    camera_type = "2D"
 
 # Hilo 1: Pipeline IA
 hilo_ia = threading.Thread(
