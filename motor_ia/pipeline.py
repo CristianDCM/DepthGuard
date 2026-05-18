@@ -22,7 +22,7 @@ from backend.supabase_cliente import obtener_cliente
 from backend.snapshot_uploader import subir_snapshot
 from config.settings import (
     COOLDOWN_EMBEDDING, COOLDOWN_ANTISPOOFING,
-    COOLDOWN_EVENTO, CAPTURAS_DIR
+    CAPTURAS_DIR
 )
 
 # FPS objetivo para el pipeline (evita consumir 100% CPU)
@@ -112,7 +112,6 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
     # Timers
     t_embedding = 0
     t_spoofing = 0
-    t_evento = 0
     t_cache_refresh = time.time()  # Para recarga periódica de caché
     t_snapshot = 0                 # Para snapshots de preview en vivo
 
@@ -131,6 +130,18 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
     # FPS counter para debug
     _fps_count = 0
     _fps_timer = time.time()
+
+    # === Tracking de sesión de presencia ===
+    # Evita emitir eventos repetidos para la misma persona parada frente a la cámara.
+    # Solo emite un nuevo evento cuando:
+    #   1. Cambia el sujeto (persona diferente)
+    #   2. Cambia el estado (de ACCESO a FRAUDE, etc.)
+    #   3. El rostro desaparece por >30s y vuelve
+    _sesion_tipo = None          # "ACCESO_PERMITIDO", "DESCONOCIDO", "FRAUDE" o None
+    _sesion_sujeto = None        # nombre del sujeto actual (None = desconocido)
+    _sesion_usuario_id = None    # ID del usuario de la sesión actual
+    _ultimo_rostro_visto = 0     # Timestamp de la última vez que se vio un rostro
+    _SESION_TIMEOUT = 30         # Segundos sin rostro para considerar que la persona se fue
 
     print("🟢 Pipeline IA activo")
     print("   📺 Ventana de preview abierta (presiona 'q' para cerrar)")
@@ -166,6 +177,12 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
                 _reg_dir_actual = None
                 _reg_tiempo_inicio = 0
 
+                # Si el rostro desapareció por más del timeout, resetear sesión
+                if _sesion_tipo is not None and (ahora - _ultimo_rostro_visto) >= _SESION_TIMEOUT:
+                    _sesion_tipo = None
+                    _sesion_sujeto = None
+                    _sesion_usuario_id = None
+
                 # Mostrar frame sin detección (reusar frame directamente)
                 cv2.putText(color, "DEPTHGUARD - Preview", (10, 25),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
@@ -179,6 +196,9 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
                 # Limitar FPS cuando no hay rostro (menos urgencia)
                 _dormir_hasta_fps(frame_start, MIN_FRAME_TIME * 2)
                 continue
+
+            # Marcar que estamos viendo un rostro ahora
+            _ultimo_rostro_visto = ahora
 
             # Si cámara simulada: generar profundidad a partir del bbox ya detectado
             if _es_simulada and bbox is not None:
@@ -263,8 +283,11 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
 
             # === FRAUDE ===
             if not es_real and not es_dist:
-                if ahora - t_evento >= COOLDOWN_EVENTO:
-                    t_evento = ahora
+                # Solo emitir si es una situación nueva (no estaba en FRAUDE)
+                if _sesion_tipo != "FRAUDE":
+                    _sesion_tipo = "FRAUDE"
+                    _sesion_sujeto = None
+                    _sesion_usuario_id = None
                     ruta = _guardar_foto(color, "fraude")
                     cola_eventos.put({
                         "tipo": "FRAUDE",
@@ -290,8 +313,16 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
                     confianza_actual = confianza
 
                     if nombre:
-                        if ahora - t_evento >= COOLDOWN_EVENTO:
-                            t_evento = ahora
+                        # Solo emitir evento si es un sujeto diferente
+                        # o la sesión había expirado
+                        es_nuevo = (
+                            _sesion_tipo != "ACCESO_PERMITIDO" or
+                            _sesion_sujeto != nombre
+                        )
+                        if es_nuevo:
+                            _sesion_tipo = "ACCESO_PERMITIDO"
+                            _sesion_sujeto = nombre
+                            _sesion_usuario_id = usuario_id
                             ruta = _guardar_foto(color, "acceso")
                             cola_eventos.put({
                                 "tipo": "ACCESO_PERMITIDO",
@@ -303,8 +334,11 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
                                 "frame": color.copy()
                             })
                     else:
-                        if ahora - t_evento >= COOLDOWN_EVENTO:
-                            t_evento = ahora
+                        # Solo emitir DESCONOCIDO una vez por sesión
+                        if _sesion_tipo != "DESCONOCIDO":
+                            _sesion_tipo = "DESCONOCIDO"
+                            _sesion_sujeto = None
+                            _sesion_usuario_id = None
                             ruta = _guardar_foto(color, "desconocido")
                             cola_eventos.put({
                                 "tipo": "DESCONOCIDO",
@@ -344,8 +378,12 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
                 usuarios = _cargar_usuarios_supabase()
                 reconocedor.recargar_cache(usuarios)
                 t_cache_refresh = ahora
-                nombre_actual = None  # Limpiar nombre reconocido
+                nombre_actual = None
                 confianza_actual = 0
+                # Resetear sesión para re-evaluar el rostro actual
+                _sesion_tipo = None
+                _sesion_sujeto = None
+                _sesion_usuario_id = None
                 print(f"   🔄 Caché recargada (invalidación externa): {len(usuarios)} usuarios")
 
             # Recarga periódica automática cada 60s
@@ -356,6 +394,10 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
                 reconocedor.recargar_cache(usuarios)
                 nombre_actual = None
                 confianza_actual = 0
+                # Resetear sesión para re-evaluar
+                _sesion_tipo = None
+                _sesion_sujeto = None
+                _sesion_usuario_id = None
 
             # FPS debug (cada 3 segundos)
             _fps_count += 1
