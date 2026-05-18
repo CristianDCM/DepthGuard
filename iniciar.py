@@ -71,9 +71,14 @@ hilo_sync = threading.Thread(
 )
 hilo_sync.start()
 
-# Hilo 3: Heartbeat
+# Hilo 3: Heartbeat (con info de cámara para el frontend)
 hilo_heartbeat = threading.Thread(
     target=iniciar_heartbeat,
+    kwargs={
+        "camera_id": camera_id,
+        "camera_type": camera_type,
+        "modo_camara": MODO_CAMARA,
+    },
     daemon=True
 )
 hilo_heartbeat.start()
