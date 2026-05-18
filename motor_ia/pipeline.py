@@ -16,6 +16,7 @@ from motor_ia.deteccion.face_mesh import DetectorFaceMesh
 from motor_ia.antispoofing.verificador_3d import VerificadorAntiSpoofing
 from motor_ia.reconocimiento.embedding_generator import ReconocedorFacial
 from motor_ia.visualizacion import dibujar_preview, mostrar_preview
+from motor_ia.estado_registro import ANGULOS_REGISTRO
 from backend.supabase_cliente import obtener_cliente
 from config.settings import (
     COOLDOWN_EMBEDDING, COOLDOWN_ANTISPOOFING,
@@ -25,6 +26,9 @@ from config.settings import (
 # FPS objetivo para el pipeline (evita consumir 100% CPU)
 TARGET_FPS = 20
 MIN_FRAME_TIME = 1.0 / TARGET_FPS
+
+# Tiempo que la persona debe mantener la pose antes de capturar (segundos)
+TIEMPO_ESTABILIZACION = 1.0
 
 
 def _guardar_foto(imagen, prefijo):
@@ -105,6 +109,11 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
     nombre_actual = None
     confianza_actual = 0
 
+    # Estado de estabilización para registro
+    _reg_dir_actual = None       # Última dirección detectada durante registro
+    _reg_tiempo_inicio = 0       # Cuándo empezó a mirar en la dirección correcta
+    _reg_captura_flash = 0       # Timestamp del flash verde de captura exitosa
+
     # FPS counter para debug
     _fps_count = 0
     _fps_timer = time.time()
@@ -139,10 +148,17 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
             encontrada, bbox, angulo, direccion = detector.detectar(imagen_rgb)
 
             if not encontrada:
+                # Resetear estabilización si se pierde el rostro
+                _reg_dir_actual = None
+                _reg_tiempo_inicio = 0
+
                 # Mostrar frame sin detección (reusar frame directamente)
                 cv2.putText(color, "DEPTHGUARD - Preview", (10, 25),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-                cv2.putText(color, "Sin rostro detectado", (10, 55),
+                msg_sin_rostro = "Sin rostro detectado"
+                if modo_registro.activo:
+                    msg_sin_rostro = "Coloque su rostro frente a la camara"
+                cv2.putText(color, msg_sin_rostro, (10, 55),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 100), 1)
                 if mostrar_preview(color):
                     break
@@ -178,19 +194,53 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
 
             es_real, es_dist, motivo, metricas = spoofing_cache
 
-            # === REGISTRO ===
+            # === REGISTRO CON GUIADO DE ÁNGULOS ===
             if modo_registro.activo and es_real:
-                embedding = reconocedor.generar_embedding(imagen_rgb, bbox)
-                if embedding is not None:
-                    # Acumular embedding real en el estado de registro
-                    modo_registro.agregar_embedding(embedding)
-                    paso = len(modo_registro.embeddings)
-                    modo_registro.paso = paso
-                    print(f"   📸 Registro: embedding {paso}/5 capturado (ángulo: {direccion})")
-                # Preview en modo registro
+                angulo_solicitado = modo_registro.angulo_solicitado
+                angulo_ok = (direccion == angulo_solicitado)
+                captura_reciente = (ahora - _reg_captura_flash) < 0.8  # flash 0.8s
+
+                # Lógica de estabilización
+                if angulo_ok:
+                    if _reg_dir_actual != angulo_solicitado:
+                        # Acaba de girar a la dirección correcta
+                        _reg_dir_actual = angulo_solicitado
+                        _reg_tiempo_inicio = ahora
+                    
+                    tiempo_estable = ahora - _reg_tiempo_inicio
+
+                    # Capturar cuando está estable el tiempo suficiente
+                    if tiempo_estable >= TIEMPO_ESTABILIZACION and modo_registro.puede_capturar():
+                        embedding = reconocedor.generar_embedding(imagen_rgb, bbox)
+                        if embedding is not None:
+                            modo_registro.registrar_captura(embedding, angulo_solicitado)
+                            paso = modo_registro.paso
+                            _reg_captura_flash = ahora
+                            _reg_dir_actual = None  # Reset para siguiente ángulo
+                            _reg_tiempo_inicio = 0
+                            print(f"   📸 Registro: embedding {paso}/5 capturado (ángulo: {angulo_solicitado})")
+                else:
+                    # No está mirando en la dirección correcta
+                    _reg_dir_actual = None
+                    _reg_tiempo_inicio = 0
+                    tiempo_estable = 0
+
+                # Info para visualización
+                registro_info = {
+                    "angulo_solicitado": angulo_solicitado,
+                    "paso": modo_registro.paso,
+                    "angulo_ok": angulo_ok,
+                    "estabilizado": angulo_ok and (ahora - _reg_tiempo_inicio) >= TIEMPO_ESTABILIZACION * 0.5,
+                    "tiempo_estable": (ahora - _reg_tiempo_inicio) if angulo_ok and _reg_tiempo_inicio > 0 else 0,
+                    "captura_reciente": captura_reciente,
+                    "angulos_capturados": modo_registro.angulos_capturados,
+                    "nombre": modo_registro.nombre,
+                }
+
                 vista = dibujar_preview(
                     color, bbox, es_real, es_dist, motivo, metricas,
-                    modo_registro.nombre, 0, True
+                    modo_registro.nombre, 0, True,
+                    registro_info=registro_info
                 )
                 if mostrar_preview(vista):
                     break

@@ -99,7 +99,12 @@ def _ejecutar_registro(supabase, comando, modo_registro):
         paso_actual = modo_registro.paso
         if paso_actual != ultimo_paso_reportado:
             ultimo_paso_reportado = paso_actual
-            _actualizar_comando(supabase, cmd_id, "en_progreso", progreso=paso_actual)
+            _actualizar_comando(supabase, cmd_id, "en_progreso",
+                                progreso=paso_actual,
+                                resultado={
+                                    "angulo_solicitado": modo_registro.angulo_solicitado,
+                                    "angulos_capturados": modo_registro.angulos_capturados,
+                                })
 
         # Verificar si hay suficientes embeddings
         embeddings = modo_registro.embeddings
