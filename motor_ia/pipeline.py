@@ -19,6 +19,7 @@ from motor_ia.reconocimiento.embedding_generator import ReconocedorFacial
 from motor_ia.visualizacion import dibujar_preview, mostrar_preview
 from motor_ia.estado_registro import ANGULOS_REGISTRO
 from backend.supabase_cliente import obtener_cliente
+from backend.snapshot_uploader import subir_snapshot
 from config.settings import (
     COOLDOWN_EMBEDDING, COOLDOWN_ANTISPOOFING,
     COOLDOWN_EVENTO, CAPTURAS_DIR
@@ -34,6 +35,9 @@ TIEMPO_ESTABILIZACION = 1.0
 # Intervalo de recarga automática de caché (segundos)
 # Detecta eliminaciones de usuarios hechas desde el frontend
 CACHE_REFRESH_INTERVAL = 60
+
+# Intervalo entre snapshots para preview en vivo (segundos)
+SNAPSHOT_INTERVAL = 2.0
 
 # Evento global para forzar recarga de caché desde otros hilos (ej: sync)
 cache_invalidada = threading.Event()
@@ -110,6 +114,7 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
     t_spoofing = 0
     t_evento = 0
     t_cache_refresh = time.time()  # Para recarga periódica de caché
+    t_snapshot = 0                 # Para snapshots de preview en vivo
 
     # Cache
     spoofing_cache = None
@@ -315,6 +320,15 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
             )
             if mostrar_preview(vista):
                 break
+
+            # === SNAPSHOT para preview en vivo (cada 2s) ===
+            if ahora - t_snapshot >= SNAPSHOT_INTERVAL:
+                t_snapshot = ahora
+                threading.Thread(
+                    target=subir_snapshot,
+                    args=(vista.copy(),),
+                    daemon=True
+                ).start()
 
             # Recargar caché si se registró alguien nuevo
             if modo_registro.recargar_cache:
