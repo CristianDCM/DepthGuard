@@ -76,11 +76,14 @@ def _cargar_usuarios_supabase():
         return []
 
 
-def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
+def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provider=None):
     """
     Bucle principal. Corre en un hilo separado.
     modo_registro: instancia de EstadoRegistro (thread-safe).
     db_manager: legacy, ya no se usa (los usuarios se cargan de Supabase).
+    frame_provider: instancia de FrameProvider (opcional). Si se pasa,
+        el último frame renderizado se entrega al servidor WebRTC vía
+        un buffer thread-safe. El pipeline NO usa asyncio en ningún momento.
     """
 
     # Crear componentes
@@ -355,7 +358,13 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None):
             if mostrar_preview(vista):
                 break
 
+            # === WEBRTC: actualizar FrameProvider (cada frame) ===
+            # Llamada síncrona y thread-safe. No bloquea el pipeline.
+            if frame_provider is not None:
+                frame_provider.update_frame(vista.copy())
+
             # === SNAPSHOT para preview en vivo (cada 2s) ===
+            # snapshot_uploader.py se conserva intacto como fallback.
             if ahora - t_snapshot >= SNAPSHOT_INTERVAL:
                 t_snapshot = ahora
                 threading.Thread(

@@ -2,11 +2,12 @@
 DEPTHGUARD - Punto de entrada (Nodo Edge).
 Ejecutar: python iniciar.py
 
-Arranca 4 hilos:
+Arranca 5 hilos:
   1. Pipeline IA — cámara → detección → anti-spoofing → reconocimiento
   2. Sync Supabase — lee la cola de eventos y los envía a Supabase Cloud
   3. Heartbeat — actualiza estado_sistema.ultimo_heartbeat cada 30s
   4. Command Listener — polling de comandos del frontend (registro, etc.)
+  5. WebRTC Server — streaming de video en tiempo real (aiortc + Supabase Broadcast)
 """
 
 import warnings
@@ -31,6 +32,7 @@ from motor_ia.estado_registro import EstadoRegistro
 from backend.supabase_sync import iniciar_sync
 from backend.heartbeat import iniciar_heartbeat, apagar_camaras
 from backend.command_listener import iniciar_command_listener
+from backend.webrtc_server import FrameProvider, WebRTCManager
 
 os.makedirs(CAPTURAS_DIR, exist_ok=True)
 
@@ -51,6 +53,9 @@ if not SUPABASE_URL:
 cola_eventos = queue.Queue()
 modo_registro = EstadoRegistro()
 
+# Buffer thread-safe para WebRTC: Pipeline escribe, WebRTCManager lee
+frame_provider = FrameProvider()
+
 # Determinar tipo de cámara
 # RealSense → entrada_principal (3D anti-spoofing)
 # Webcam    → entrada_secundaria (2D reconocimiento)
@@ -65,6 +70,7 @@ else:
 hilo_ia = threading.Thread(
     target=ejecutar_pipeline,
     args=(cola_eventos, modo_registro, None),  # db=None, ya no se usa SQLite
+    kwargs={"frame_provider": frame_provider},
     daemon=True
 )
 hilo_ia.start()
@@ -97,11 +103,22 @@ hilo_commands = threading.Thread(
 )
 hilo_commands.start()
 
+# Hilo 5: WebRTC Server (streaming en tiempo real)
+# Si aiortc no está instalado, WebRTCManager lo advierte y el sistema
+# sigue funcionando con snapshots JPEG como fallback automático.
+webrtc_mgr = WebRTCManager(frame_provider, camera_id)
+hilo_webrtc = threading.Thread(
+    target=webrtc_mgr.iniciar,
+    daemon=True
+)
+hilo_webrtc.start()
+
 print()
 print(f"📷 Cámara: {MODO_CAMARA} ({camera_id} / {camera_type})")
 print(f"☁️  Supabase: {SUPABASE_URL[:40]}...")
 print(f"💓 Heartbeat: cada 30s")
 print(f"📡 Command Listener: polling cada 2s")
+print(f"📡 WebRTC: canal 'webrtc-signaling-{camera_id}'")
 print()
 print("Presiona Ctrl+C para detener")
 print()
