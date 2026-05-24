@@ -53,8 +53,25 @@ echo.
 echo  [2/6] Creando entorno virtual...         [####......] 33%%
 echo [PASO 2] Creando entorno virtual... >> "%LOG_FILE%"
 if exist venv (
-    echo    [~] Ya existe un entorno virtual. Se usara el existente.
-    echo    [SKIP] Entorno virtual ya existe >> "%LOG_FILE%"
+    :: Verificar que el venv no esta roto (ruta movida/renombrada)
+    venv\Scripts\python.exe --version >nul 2>&1
+    if !errorlevel! neq 0 (
+        echo    [~] Entorno virtual roto (ruta del proyecto cambio). Recreando...
+        echo    [WARN] venv roto, recreando >> "%LOG_FILE%"
+        rmdir /s /q venv 2>>  "%LOG_FILE%"
+        python -m venv venv 2>> "%LOG_FILE%"
+        if !errorlevel! neq 0 (
+            echo    [X] ERROR: No se pudo recrear el entorno virtual. Revisa %LOG_FILE%.
+            echo [ERROR] Fallo al recrear venv >> "%LOG_FILE%"
+            pause
+            exit /b 1
+        )
+        echo    [OK] Entorno virtual recreado en nueva ubicacion
+        echo    [OK] Entorno virtual recreado >> "%LOG_FILE%"
+    ) else (
+        echo    [~] Ya existe un entorno virtual. Se usara el existente.
+        echo    [SKIP] Entorno virtual ya existe >> "%LOG_FILE%"
+    )
 ) else (
     python -m venv venv 2>> "%LOG_FILE%"
     if !errorlevel! neq 0 (
@@ -112,11 +129,11 @@ echo [PASO 5] Instalando dependencias... >> "%LOG_FILE%"
 :: --- 5a: dlib precompilado ---
 echo    ^> [5a] dlib (precompilado)...
 echo    [5a] Instalando dlib-bin... >> "%LOG_FILE%"
-pip install dlib-bin --quiet 2>> "%LOG_FILE%"
+python -m pip install dlib-bin --quiet 2>> "%LOG_FILE%"
 if %errorlevel% neq 0 (
     echo    [~] dlib-bin fallo. Intentando con dlib normal...
     echo    [WARN] dlib-bin fallo, intentando dlib source >> "%LOG_FILE%"
-    pip install dlib --quiet 2>> "%LOG_FILE%"
+    python -m pip install dlib --quiet 2>> "%LOG_FILE%"
     if !errorlevel! neq 0 (
         echo    [X] dlib tambien fallo. Necesitas Microsoft C++ Build Tools.
         echo    [ERROR] dlib source tambien fallo >> "%LOG_FILE%"
@@ -132,7 +149,7 @@ if %errorlevel% neq 0 (
 :: --- 5b: numpy ---
 echo    ^> [5b] numpy...
 echo    [5b] Instalando numpy... >> "%LOG_FILE%"
-pip install numpy==1.24.4 --quiet 2>> "%LOG_FILE%"
+python -m pip install numpy==1.24.4 --quiet 2>> "%LOG_FILE%"
 if %errorlevel% neq 0 (
     echo    [X] numpy fallo. Revisa %LOG_FILE%.
     echo    [ERROR] numpy fallo >> "%LOG_FILE%"
@@ -144,7 +161,7 @@ if %errorlevel% neq 0 (
 :: --- 5c: opencv ---
 echo    ^> [5c] OpenCV...
 echo    [5c] Instalando opencv-python... >> "%LOG_FILE%"
-pip install opencv-python==4.8.1.78 --quiet 2>> "%LOG_FILE%"
+python -m pip install opencv-python==4.8.1.78 --quiet 2>> "%LOG_FILE%"
 if %errorlevel% neq 0 (
     echo    [X] opencv-python fallo. Revisa %LOG_FILE%.
     echo    [ERROR] opencv-python fallo >> "%LOG_FILE%"
@@ -156,7 +173,7 @@ if %errorlevel% neq 0 (
 :: --- 5d: mediapipe ---
 echo    ^> [5d] MediaPipe...
 echo    [5d] Instalando mediapipe... >> "%LOG_FILE%"
-pip install mediapipe==0.10.14 --quiet 2>> "%LOG_FILE%"
+python -m pip install mediapipe==0.10.14 --quiet 2>> "%LOG_FILE%"
 if %errorlevel% neq 0 (
     echo    [X] mediapipe fallo. Revisa %LOG_FILE%.
     echo    [ERROR] mediapipe fallo >> "%LOG_FILE%"
@@ -168,10 +185,10 @@ if %errorlevel% neq 0 (
 :: --- 5e: face-recognition (sin dlib como dep, ya que usamos dlib-bin) ---
 echo    ^> [5e] face-recognition...
 echo    [5e] Instalando face-recognition (--no-deps)... >> "%LOG_FILE%"
-pip install face-recognition==1.3.0 --no-deps --quiet 2>> "%LOG_FILE%"
-pip install face_recognition_models --quiet 2>> "%LOG_FILE%"
-pip install click --quiet 2>> "%LOG_FILE%"
-pip install Pillow --quiet 2>> "%LOG_FILE%"
+python -m pip install face-recognition==1.3.0 --no-deps --quiet 2>> "%LOG_FILE%"
+python -m pip install face_recognition_models --quiet 2>> "%LOG_FILE%"
+python -m pip install click --quiet 2>> "%LOG_FILE%"
+python -m pip install Pillow --quiet 2>> "%LOG_FILE%"
 if %errorlevel% neq 0 (
     echo    [X] face-recognition fallo. Revisa %LOG_FILE%.
     echo    [ERROR] face-recognition fallo >> "%LOG_FILE%"
@@ -183,7 +200,7 @@ if %errorlevel% neq 0 (
 :: --- 5f: supabase ---
 echo    ^> [5f] Supabase SDK...
 echo    [5f] Instalando supabase... >> "%LOG_FILE%"
-pip install supabase==2.15.2 --quiet 2>> "%LOG_FILE%"
+python -m pip install supabase==2.15.2 --quiet 2>> "%LOG_FILE%"
 if %errorlevel% neq 0 (
     echo    [X] supabase fallo. Revisa %LOG_FILE%.
     echo    [ERROR] supabase fallo >> "%LOG_FILE%"
@@ -195,13 +212,25 @@ if %errorlevel% neq 0 (
 :: --- 5g: pyrealsense2 (opcional) ---
 echo    ^> [5g] pyrealsense2 (opcional)...
 echo    [5g] Instalando pyrealsense2... >> "%LOG_FILE%"
-pip install pyrealsense2==2.55.1.6486 --quiet 2>> "%LOG_FILE%"
+python -m pip install pyrealsense2==2.55.1.6486 --quiet 2>> "%LOG_FILE%"
 if %errorlevel% neq 0 (
     echo    [~] pyrealsense2 no se pudo instalar. (Normal si no hay SDK).
     echo    [WARN] pyrealsense2 no instalado >> "%LOG_FILE%"
 ) else (
     echo    [OK] pyrealsense2 instalado
     echo    [OK] pyrealsense2 instalado >> "%LOG_FILE%"
+)
+
+:: --- 5h: aiortc + av (WebRTC streaming) ---
+echo    ^> [5h] aiortc + av (WebRTC)...
+echo    [5h] Instalando aiortc + av... >> "%LOG_FILE%"
+python -m pip install aiortc av --quiet 2>> "%LOG_FILE%"
+if %errorlevel% neq 0 (
+    echo    [~] aiortc/av fallo. WebRTC deshabilitado, se usara snapshot.
+    echo    [WARN] aiortc/av fallo >> "%LOG_FILE%"
+) else (
+    echo    [OK] aiortc + av instalados (WebRTC habilitado)
+    echo    [OK] aiortc + av instalados >> "%LOG_FILE%"
 )
 
 echo.
@@ -301,6 +330,15 @@ if !errorlevel! neq 0 (
     echo    [PASS] import dlib >> "%LOG_FILE%"
 )
 
+python -c "import aiortc" 2>> "%LOG_FILE%"
+if !errorlevel! neq 0 (
+    echo    [~] aiortc NO disponible (WebRTC deshabilitado, fallback a snapshot)
+    echo    [WARN] import aiortc >> "%LOG_FILE%"
+) else (
+    echo    [OK] aiortc (WebRTC habilitado)
+    echo    [PASS] import aiortc >> "%LOG_FILE%"
+)
+
 :: -----------------------------------------------
 :: LISTO
 :: -----------------------------------------------
@@ -326,6 +364,7 @@ echo.
 echo   Notas:
 echo   - Edita .env y agrega tus credenciales de Supabase
 echo   - Si usas RealSense, cambia MODO_CAMARA=realsense en .env
+echo   - Configura TURN_URL, TURN_USERNAME, TURN_CREDENTIAL en .env para WebRTC
 echo   - Admin por defecto: admin / admin123
 echo.
 pause
