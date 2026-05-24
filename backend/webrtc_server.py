@@ -23,6 +23,7 @@ import numpy as np
 try:
     import av
     from aiortc import RTCPeerConnection, RTCSessionDescription, RTCIceCandidate
+    from aiortc.sdp import candidate_from_sdp
     from aiortc.contrib.media import MediaStreamTrack
     import fractions
     WEBRTC_DISPONIBLE = True
@@ -185,7 +186,7 @@ class WebRTCManager:
 
     async def _run(self):
         """Bucle principal asíncrono."""
-        logging.info(f"📡 WebRTC: iniciando en canal '{self._canal_nombre}'")
+        print(f"📡 WebRTC: iniciando en canal '{self._canal_nombre}'")
         await self._suscribir_supabase()
 
         # Mantener el event loop vivo indefinidamente
@@ -203,20 +204,23 @@ class WebRTCManager:
         Suscribe al canal Broadcast de Supabase para recibir
         ofertas SDP y candidatos ICE del frontend.
         """
-        from supabase import create_client
-        supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+        from supabase import create_async_client
+        supabase = await create_async_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
         canal = supabase.channel(self._canal_nombre)
 
         def _on_mensaje(payload):
             """Callback síncrono de Supabase — puente a asyncio."""
+            print(f"📩 WebRTC: mensaje recibido en Broadcast: {payload}")
             if self._loop is None:
                 return
             evento = payload.get("payload", {})
             tipo = evento.get("tipo")
             session_id = evento.get("session_id", "default")
+            print(f"📩 WebRTC: tipo={tipo}, session_id={session_id[:12] if session_id else 'N/A'}")
 
             if tipo == "offer":
+                print(f"📥 WebRTC: offer recibida de sesión {session_id[:12]}")
                 asyncio.run_coroutine_threadsafe(
                     self._manejar_offer(evento, canal, session_id),
                     self._loop,
@@ -228,9 +232,9 @@ class WebRTCManager:
                 )
 
         canal.on_broadcast(event="señalización", callback=_on_mensaje)
-        canal.subscribe()
+        await canal.subscribe()
         self._canal_supabase = canal
-        logging.info(f"✅ WebRTC: suscrito a Supabase Broadcast '{self._canal_nombre}'")
+        print(f"✅ WebRTC: suscrito a Supabase Broadcast '{self._canal_nombre}'")
 
     async def _manejar_offer(self, evento: dict, canal, session_id: str):
         """Procesa una SDP offer del frontend y genera la answer."""
@@ -249,11 +253,9 @@ class WebRTCManager:
         track = DepthGuardVideoTrack(self._provider)
         pc.addTrack(track)
 
-        # Manejar candidatos ICE locales → enviar al frontend
-        @pc.on("icecandidate")
-        def on_ice(candidate):
-            if candidate:
-                asyncio.ensure_future(self._enviar_ice_candidate(candidate, canal, session_id))
+        # NOTA: aiortc NO soporta Trickle ICE, así que @pc.on("icecandidate")
+        # nunca se dispara. Los candidatos ICE van embebidos en el SDP de la answer
+        # después de esperar a que ICE gathering termine.
 
         @pc.on("connectionstatechange")
         async def on_state():
@@ -269,8 +271,22 @@ class WebRTCManager:
         answer = await pc.createAnswer()
         await pc.setLocalDescription(answer)
 
+        # Esperar a que ICE gathering termine para que el SDP
+        # contenga todos los candidatos (máximo 10s)
+        print(f"🧊 WebRTC: esperando ICE gathering para sesión {session_id[:8]}...")
+        for _ in range(100):  # 100 × 0.1s = 10s timeout
+            if pc.iceGatheringState == "complete":
+                break
+            await asyncio.sleep(0.1)
+
+        if pc.iceGatheringState != "complete":
+            print(f"⚠️  WebRTC: ICE gathering timeout para sesión {session_id[:8]}")
+        else:
+            print(f"🧊 WebRTC: ICE gathering completado para sesión {session_id[:8]}")
+
         # Enviar answer al frontend por Broadcast
-        canal.send_broadcast(
+        # El SDP ahora contiene todos los candidatos ICE embebidos
+        await canal.send_broadcast(
             event="señalización",
             payload={
                 "tipo": "answer",
@@ -278,7 +294,7 @@ class WebRTCManager:
                 "sdp": pc.localDescription.sdp,
             },
         )
-        logging.info(f"📤 WebRTC: answer enviada a sesión {session_id[:8]}...")
+        print(f"📤 WebRTC: answer enviada a sesión {session_id[:8]}...")
 
     async def _manejar_ice_candidate(self, evento: dict, session_id: str):
         """Agrega un candidato ICE del frontend a la conexión correspondiente."""
@@ -288,26 +304,16 @@ class WebRTCManager:
         try:
             candidate_data = evento.get("candidate", {})
             if candidate_data:
-                candidate = RTCIceCandidate(
-                    sdpMid=candidate_data.get("sdpMid"),
-                    sdpMLineIndex=candidate_data.get("sdpMLineIndex"),
-                    candidate=candidate_data.get("candidate"),
-                )
+                candidate_sdp = candidate_data.get("candidate", "")
+                if not candidate_sdp:
+                    return
+                # Parsear el string SDP a un objeto RTCIceCandidate de aiortc
+                candidate = candidate_from_sdp(candidate_sdp)
+                candidate.sdpMid = candidate_data.get("sdpMid")
+                candidate.sdpMLineIndex = candidate_data.get("sdpMLineIndex")
                 await pc.addIceCandidate(candidate)
         except Exception as e:
             logging.warning(f"⚠️  WebRTC: error añadiendo ICE candidate: {e}")
 
-    async def _enviar_ice_candidate(self, candidate, canal, session_id: str):
-        """Envía un candidato ICE local al frontend."""
-        canal.send_broadcast(
-            event="señalización",
-            payload={
-                "tipo": "ice_candidate",
-                "session_id": session_id,
-                "candidate": {
-                    "candidate": candidate.candidate,
-                    "sdpMid": candidate.sdpMid,
-                    "sdpMLineIndex": candidate.sdpMLineIndex,
-                },
-            },
-        )
+    # NOTA: _enviar_ice_candidate() fue eliminado.
+    # aiortc no soporta Trickle ICE — los candidatos van embebidos en el SDP.
