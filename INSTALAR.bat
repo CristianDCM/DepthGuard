@@ -52,37 +52,33 @@ echo    [OK] Python %PYTHON_VER% >> "%LOG_FILE%"
 echo.
 echo  [2/6] Creando entorno virtual...         [####......] 33%%
 echo [PASO 2] Creando entorno virtual... >> "%LOG_FILE%"
-if exist venv (
-    :: Verificar que el venv no esta roto (ruta movida/renombrada)
-    venv\Scripts\python.exe --version >nul 2>&1
-    if !errorlevel! neq 0 (
-        echo    [~] Entorno virtual roto (ruta del proyecto cambio). Recreando...
-        echo    [WARN] venv roto, recreando >> "%LOG_FILE%"
-        rmdir /s /q venv 2>>  "%LOG_FILE%"
-        python -m venv venv 2>> "%LOG_FILE%"
-        if !errorlevel! neq 0 (
-            echo    [X] ERROR: No se pudo recrear el entorno virtual. Revisa %LOG_FILE%.
-            echo [ERROR] Fallo al recrear venv >> "%LOG_FILE%"
-            pause
-            exit /b 1
-        )
-        echo    [OK] Entorno virtual recreado en nueva ubicacion
-        echo    [OK] Entorno virtual recreado >> "%LOG_FILE%"
-    ) else (
-        echo    [~] Ya existe un entorno virtual. Se usara el existente.
-        echo    [SKIP] Entorno virtual ya existe >> "%LOG_FILE%"
-    )
-) else (
-    python -m venv venv 2>> "%LOG_FILE%"
-    if !errorlevel! neq 0 (
-        echo    [X] ERROR: No se pudo crear el entorno virtual. Revisa %LOG_FILE%.
-        echo [ERROR] Fallo al crear venv >> "%LOG_FILE%"
-        pause
-        exit /b 1
-    )
-    echo    [OK] Entorno virtual creado
-    echo    [OK] Entorno virtual creado >> "%LOG_FILE%"
+
+if not exist venv goto :crear_venv
+
+REM Verificar que el venv no esta roto (ruta movida/renombrada)
+venv\Scripts\python.exe --version >nul 2>&1
+if !errorlevel! equ 0 (
+    echo    [~] Ya existe un entorno virtual. Se usara el existente.
+    echo    [SKIP] Entorno virtual ya existe >> "%LOG_FILE%"
+    goto :venv_ok
 )
+
+echo    [~] Entorno virtual roto (ruta del proyecto cambio). Recreando...
+echo    [WARN] venv roto, recreando >> "%LOG_FILE%"
+rmdir /s /q venv 2>> "%LOG_FILE%"
+
+:crear_venv
+python -m venv venv 2>> "%LOG_FILE%"
+if !errorlevel! neq 0 (
+    echo    [X] ERROR: No se pudo crear el entorno virtual. Revisa %LOG_FILE%.
+    echo [ERROR] Fallo al crear venv >> "%LOG_FILE%"
+    pause
+    exit /b 1
+)
+echo    [OK] Entorno virtual listo
+echo    [OK] Entorno virtual creado >> "%LOG_FILE%"
+
+:venv_ok
 
 :: -----------------------------------------------
 :: PASO 3: Activar entorno virtual
