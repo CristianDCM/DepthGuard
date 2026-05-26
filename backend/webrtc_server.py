@@ -211,13 +211,13 @@ class WebRTCManager:
 
         def _on_mensaje(payload):
             """Callback síncrono de Supabase — puente a asyncio."""
-            print(f"📩 WebRTC: mensaje recibido en Broadcast: {payload}")
             if self._loop is None:
                 return
             evento = payload.get("payload", {})
             tipo = evento.get("tipo")
             session_id = evento.get("session_id", "default")
-            print(f"📩 WebRTC: tipo={tipo}, session_id={session_id[:12] if session_id else 'N/A'}")
+            sdp_len = len(evento.get("sdp", "")) if evento.get("sdp") else 0
+            print(f"📩 WebRTC: tipo={tipo}, session={session_id[:12]}..., sdp={sdp_len} chars")
 
             if tipo == "offer":
                 print(f"📥 WebRTC: offer recibida de sesión {session_id[:12]}")
