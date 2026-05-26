@@ -231,7 +231,7 @@ class WebRTCManager:
                     self._loop,
                 )
 
-        canal.on_broadcast(event="señalización", callback=_on_mensaje)
+        canal.on_broadcast(event="signal", callback=_on_mensaje)
         await canal.subscribe()
         self._canal_supabase = canal
         print(f"✅ WebRTC: suscrito a Supabase Broadcast '{self._canal_nombre}'")
@@ -242,6 +242,13 @@ class WebRTCManager:
 
         sdp = evento.get("sdp")
         if not sdp:
+            return
+
+        # Guard contra offers duplicadas: si ya existe una conexión activa
+        # para esta sesión, ignorar (previene re-renders de React).
+        existing = self._conexiones.get(session_id)
+        if existing and existing.connectionState not in ("closed", "failed"):
+            logging.info(f"⏩ WebRTC: offer duplicada ignorada para {session_id[:8]}")
             return
 
         # Crear nueva conexión para esta sesión
@@ -287,8 +294,8 @@ class WebRTCManager:
         # Enviar answer al frontend por Broadcast
         # El SDP ahora contiene todos los candidatos ICE embebidos
         await canal.send_broadcast(
-            event="señalización",
-            payload={
+            event="signal",
+            data={
                 "tipo": "answer",
                 "session_id": session_id,
                 "sdp": pc.localDescription.sdp,

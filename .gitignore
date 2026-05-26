@@ -1,6 +1,6 @@
 # Entorno virtual
 venv/
-
+capturas/
 # Variables de entorno (secretos)
 .env
 
