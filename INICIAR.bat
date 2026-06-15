@@ -34,8 +34,34 @@ if not exist venv\Scripts\activate.bat (
     pause
     exit /b 1
 )
-echo    [OK] Entorno virtual encontrado
-echo    [OK] Entorno virtual encontrado >> "%LOG_FILE%"
+
+REM Verificar que el venv no esta roto (ruta movida/renombrada)
+venv\Scripts\python.exe --version >nul 2>&1
+if !errorlevel! equ 0 (
+    echo    [OK] Entorno virtual OK
+    echo    [OK] Entorno virtual encontrado >> "%LOG_FILE%"
+    goto :iniciar_venv_ok
+)
+
+echo    [~] Entorno virtual roto (la carpeta fue movida/renombrada). Reparando...
+echo    [WARN] venv roto, recreando >> "%LOG_FILE%"
+rmdir /s /q venv 2>> "%LOG_FILE%"
+python -m venv venv 2>> "%LOG_FILE%"
+if !errorlevel! neq 0 (
+    echo    [X] ERROR: No se pudo recrear el entorno virtual.
+    echo [ERROR] Fallo al recrear venv >> "%LOG_FILE%"
+    pause
+    exit /b 1
+)
+echo    [OK] Entorno virtual recreado. Reinstalando dependencias...
+echo    [OK] venv recreado >> "%LOG_FILE%"
+call venv\Scripts\activate.bat 2>> "%LOG_FILE%"
+python -m pip install --upgrade pip --quiet 2>> "%LOG_FILE%"
+python -m pip install -r requirements.txt --quiet 2>> "%LOG_FILE%"
+echo    [OK] Dependencias reinstaladas
+echo    [OK] Dependencias reinstaladas >> "%LOG_FILE%"
+
+:iniciar_venv_ok
 
 :: -----------------------------------------------
 :: PASO 2: Verificar .env

@@ -61,3 +61,8 @@ ADMIN_PASSWORD = _env.get("ADMIN_PASSWORD", "admin123")
 # === RUTAS ===
 BASE_DIR = _BASE_DIR
 CAPTURAS_DIR = os.path.join(BASE_DIR, "capturas")
+
+# === WEBRTC / TURN (Metered) ===
+TURN_URL        = _env.get("TURN_URL", "turn:global.relay.metered.ca:80")
+TURN_USERNAME   = _env.get("TURN_USERNAME", "")
+TURN_CREDENTIAL = _env.get("TURN_CREDENTIAL", "")
