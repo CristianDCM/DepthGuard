@@ -66,3 +66,7 @@ CAPTURAS_DIR = os.path.join(BASE_DIR, "capturas")
 TURN_URL        = _env.get("TURN_URL", "turn:global.relay.metered.ca:80")
 TURN_USERNAME   = _env.get("TURN_USERNAME", "")
 TURN_CREDENTIAL = _env.get("TURN_CREDENTIAL", "")
+
+# === RETENCIÓN DE DATOS ===
+DIAS_RETENCION = int(_env.get("DIAS_RETENCION", "30"))
+

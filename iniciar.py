@@ -2,12 +2,13 @@
 DEPTHGUARD - Punto de entrada (Nodo Edge).
 Ejecutar: python iniciar.py
 
-Arranca 5 hilos:
+Arranca 6 hilos:
   1. Pipeline IA — cámara → detección → anti-spoofing → reconocimiento
   2. Sync Supabase — lee la cola de eventos y los envía a Supabase Cloud
   3. Heartbeat — actualiza estado_sistema.ultimo_heartbeat cada 30s
   4. Command Listener — polling de comandos del frontend (registro, etc.)
   5. WebRTC Server — streaming de video en tiempo real (aiortc + Supabase Broadcast)
+  6. Cleanup — limpieza automática de datos antiguos cada 24h
 """
 
 import warnings
@@ -26,13 +27,14 @@ if sys.stdout.encoding != 'utf-8':
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config.settings import CAPTURAS_DIR, MODO_CAMARA, SUPABASE_URL
+from config.settings import CAPTURAS_DIR, MODO_CAMARA, SUPABASE_URL, DIAS_RETENCION
 from motor_ia.pipeline import ejecutar_pipeline
 from motor_ia.estado_registro import EstadoRegistro
 from backend.supabase_sync import iniciar_sync
 from backend.heartbeat import iniciar_heartbeat, apagar_camaras
 from backend.command_listener import iniciar_command_listener
 from backend.webrtc_server import FrameProvider, WebRTCManager
+from backend.cleanup import iniciar_cleanup
 
 os.makedirs(CAPTURAS_DIR, exist_ok=True)
 
@@ -113,12 +115,20 @@ hilo_webrtc = threading.Thread(
 )
 hilo_webrtc.start()
 
+# Hilo 6: Limpieza automática de datos antiguos (cada 24h)
+hilo_cleanup = threading.Thread(
+    target=iniciar_cleanup,
+    daemon=True
+)
+hilo_cleanup.start()
+
 print()
 print(f"📷 Cámara: {MODO_CAMARA} ({camera_id} / {camera_type})")
 print(f"☁️  Supabase: {SUPABASE_URL[:40]}...")
 print(f"💓 Heartbeat: cada 30s")
 print(f"📡 Command Listener: polling cada 2s")
 print(f"📡 WebRTC: canal 'webrtc-signaling-{camera_id}'")
+print(f"🧹 Cleanup: cada 24h (retención: {DIAS_RETENCION} días)")
 print()
 print("Presiona Ctrl+C para detener")
 print()
