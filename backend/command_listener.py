@@ -73,7 +73,7 @@ def _ejecutar_registro(supabase, comando, modo_registro):
     usuario_id = comando.get("usuario_id")
     nombre = comando.get("nombre", "Sin nombre")
 
-    print(f"[CommandListener] 🎯 Registro iniciado: {nombre} (usuario: {usuario_id})")
+    print(f"[CommandListener]  Registro iniciado: {nombre} (usuario: {usuario_id})")
 
     # Marcar como en progreso
     _actualizar_comando(supabase, cmd_id, "en_progreso", progreso=0)
@@ -92,7 +92,7 @@ def _ejecutar_registro(supabase, comando, modo_registro):
             _actualizar_comando(supabase, cmd_id, "cancelado", resultado={
                 "motivo": "Registro cancelado"
             })
-            print(f"[CommandListener] ❌ Registro cancelado: {nombre}")
+            print(f"[CommandListener]  Registro cancelado: {nombre}")
             return
 
         # Actualizar progreso si cambió
@@ -127,7 +127,7 @@ def _ejecutar_registro(supabase, comando, modo_registro):
                                     progreso=_ANGULOS_REQUERIDOS,
                                     resultado={"angulos": _ANGULOS_REQUERIDOS})
 
-                print(f"[CommandListener] ✅ Registro completo: {nombre} ({_ANGULOS_REQUERIDOS} embeddings)")
+                print(f"[CommandListener]  Registro completo: {nombre} ({_ANGULOS_REQUERIDOS} embeddings)")
                 return
 
             except Exception as e:
@@ -135,7 +135,7 @@ def _ejecutar_registro(supabase, comando, modo_registro):
                 _actualizar_comando(supabase, cmd_id, "error", resultado={
                     "error": f"Error guardando embeddings: {e}"
                 })
-                print(f"[CommandListener] ❌ Error guardando embeddings: {e}")
+                print(f"[CommandListener]  Error guardando embeddings: {e}")
                 return
 
         time.sleep(1)  # Revisar cada segundo
@@ -146,14 +146,14 @@ def _ejecutar_registro(supabase, comando, modo_registro):
     _actualizar_comando(supabase, cmd_id, "error", resultado={
         "error": f"Timeout: solo se capturaron {embeds_capturados}/{_ANGULOS_REQUERIDOS} embeddings"
     })
-    print(f"[CommandListener] ⏰ Timeout registro: {nombre} ({embeds_capturados} embeddings)")
+    print(f"[CommandListener]  Timeout registro: {nombre} ({embeds_capturados} embeddings)")
 
 
 def _ejecutar_cancelar(supabase, cmd_id, modo_registro):
     """Cancela un registro en progreso."""
     if modo_registro.activo:
         modo_registro.activo = False
-        print("[CommandListener] ❌ Registro cancelado por comando")
+        print("[CommandListener]  Registro cancelado por comando")
 
     _actualizar_comando(supabase, cmd_id, "completado", resultado={
         "motivo": "Cancelación ejecutada"

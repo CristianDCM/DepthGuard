@@ -22,7 +22,7 @@ class CamaraRealSense:
         for _ in range(30):
             self.pipeline.wait_for_frames()
 
-        print("✅ Cámara RealSense conectada")
+        print(" Cámara RealSense conectada")
 
     def obtener_frames(self):
         try:
@@ -45,4 +45,4 @@ class CamaraRealSense:
     def cerrar(self):
         if self.pipeline:
             self.pipeline.stop()
-            print("📷 RealSense cerrada")
+            print(" RealSense cerrada")

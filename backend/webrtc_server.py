@@ -29,7 +29,7 @@ try:
     WEBRTC_DISPONIBLE = True
 except ImportError:
     WEBRTC_DISPONIBLE = False
-    logging.warning("⚠️  aiortc no instalado. WebRTC deshabilitado. Usando solo snapshots JPEG.")
+    logging.warning("  aiortc no instalado. WebRTC deshabilitado. Usando solo snapshots JPEG.")
 
 from config.settings import TURN_URL, TURN_USERNAME, TURN_CREDENTIAL, SUPABASE_URL, SUPABASE_SERVICE_KEY
 
@@ -49,9 +49,9 @@ def _build_ice_servers():
             username=TURN_USERNAME,
             credential=TURN_CREDENTIAL,
         ))
-        logging.info(f"✅ TURN server configurado: {TURN_URL}")
+        logging.info(f" TURN server configurado: {TURN_URL}")
     else:
-        logging.warning("⚠️  TURN no configurado. WebRTC puede fallar en redes con NAT simétrico.")
+        logging.warning("  TURN no configurado. WebRTC puede fallar en redes con NAT simétrico.")
     return servers
 
 
@@ -171,7 +171,7 @@ class WebRTCManager:
         Crea el event loop asyncio y lo corre indefinidamente.
         """
         if not WEBRTC_DISPONIBLE:
-            logging.warning("⚠️  WebRTCManager no iniciado: aiortc no disponible.")
+            logging.warning("  WebRTCManager no iniciado: aiortc no disponible.")
             return
 
         self._loop = asyncio.new_event_loop()
@@ -180,13 +180,13 @@ class WebRTCManager:
         try:
             self._loop.run_until_complete(self._run())
         except Exception as e:
-            logging.error(f"❌ WebRTCManager error: {e}")
+            logging.error(f" WebRTCManager error: {e}")
         finally:
             self._loop.close()
 
     async def _run(self):
         """Bucle principal asíncrono."""
-        print(f"📡 WebRTC: iniciando en canal '{self._canal_nombre}'")
+        print(f" WebRTC: iniciando en canal '{self._canal_nombre}'")
         await self._suscribir_supabase()
 
         # Mantener el event loop vivo indefinidamente
@@ -197,7 +197,7 @@ class WebRTCManager:
                         if pc.connectionState in ("closed", "failed")]
             for sid in cerradas:
                 del self._conexiones[sid]
-                logging.info(f"🗑️  WebRTC: conexión {sid[:8]}... cerrada y eliminada")
+                logging.info(f"  WebRTC: conexión {sid[:8]}... cerrada y eliminada")
 
     async def _suscribir_supabase(self):
         """
@@ -217,10 +217,10 @@ class WebRTCManager:
             tipo = evento.get("tipo")
             session_id = evento.get("session_id", "default")
             sdp_len = len(evento.get("sdp", "")) if evento.get("sdp") else 0
-            print(f"📩 WebRTC: tipo={tipo}, session={session_id[:12]}..., sdp={sdp_len} chars")
+            print(f" WebRTC: tipo={tipo}, session={session_id[:12]}..., sdp={sdp_len} chars")
 
             if tipo == "offer":
-                print(f"📥 WebRTC: offer recibida de sesión {session_id[:12]}")
+                print(f" WebRTC: offer recibida de sesión {session_id[:12]}")
                 asyncio.run_coroutine_threadsafe(
                     self._manejar_offer(evento, canal, session_id),
                     self._loop,
@@ -234,7 +234,7 @@ class WebRTCManager:
         canal.on_broadcast(event="signal", callback=_on_mensaje)
         await canal.subscribe()
         self._canal_supabase = canal
-        print(f"✅ WebRTC: suscrito a Supabase Broadcast '{self._canal_nombre}'")
+        print(f" WebRTC: suscrito a Supabase Broadcast '{self._canal_nombre}'")
 
     async def _manejar_offer(self, evento: dict, canal, session_id: str):
         """Procesa una SDP offer del frontend y genera la answer."""
@@ -248,7 +248,7 @@ class WebRTCManager:
         # para esta sesión, ignorar (previene re-renders de React).
         existing = self._conexiones.get(session_id)
         if existing and existing.connectionState not in ("closed", "failed"):
-            logging.info(f"⏩ WebRTC: offer duplicada ignorada para {session_id[:8]}")
+            logging.info(f" WebRTC: offer duplicada ignorada para {session_id[:8]}")
             return
 
         # Crear nueva conexión para esta sesión
@@ -267,7 +267,7 @@ class WebRTCManager:
         @pc.on("connectionstatechange")
         async def on_state():
             state = pc.connectionState
-            logging.info(f"🔗 WebRTC [{session_id[:8]}]: estado → {state}")
+            logging.info(f" WebRTC [{session_id[:8]}]: estado → {state}")
             if state in ("failed", "closed"):
                 await pc.close()
                 self._conexiones.pop(session_id, None)
@@ -280,16 +280,16 @@ class WebRTCManager:
 
         # Esperar a que ICE gathering termine para que el SDP
         # contenga todos los candidatos (máximo 10s)
-        print(f"🧊 WebRTC: esperando ICE gathering para sesión {session_id[:8]}...")
+        print(f" WebRTC: esperando ICE gathering para sesión {session_id[:8]}...")
         for _ in range(100):  # 100 × 0.1s = 10s timeout
             if pc.iceGatheringState == "complete":
                 break
             await asyncio.sleep(0.1)
 
         if pc.iceGatheringState != "complete":
-            print(f"⚠️  WebRTC: ICE gathering timeout para sesión {session_id[:8]}")
+            print(f"  WebRTC: ICE gathering timeout para sesión {session_id[:8]}")
         else:
-            print(f"🧊 WebRTC: ICE gathering completado para sesión {session_id[:8]}")
+            print(f" WebRTC: ICE gathering completado para sesión {session_id[:8]}")
 
         # Enviar answer al frontend por Broadcast
         # El SDP ahora contiene todos los candidatos ICE embebidos
@@ -301,7 +301,7 @@ class WebRTCManager:
                 "sdp": pc.localDescription.sdp,
             },
         )
-        print(f"📤 WebRTC: answer enviada a sesión {session_id[:8]}...")
+        print(f" WebRTC: answer enviada a sesión {session_id[:8]}...")
 
     async def _manejar_ice_candidate(self, evento: dict, session_id: str):
         """Agrega un candidato ICE del frontend a la conexión correspondiente."""
@@ -320,7 +320,7 @@ class WebRTCManager:
                 candidate.sdpMLineIndex = candidate_data.get("sdpMLineIndex")
                 await pc.addIceCandidate(candidate)
         except Exception as e:
-            logging.warning(f"⚠️  WebRTC: error añadiendo ICE candidate: {e}")
+            logging.warning(f"  WebRTC: error añadiendo ICE candidate: {e}")
 
     # NOTA: _enviar_ice_candidate() fue eliminado.
     # aiortc no soporta Trickle ICE — los candidatos van embebidos en el SDP.

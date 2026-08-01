@@ -29,7 +29,7 @@ class CamaraSimulada:
         self._mesh_x = None
 
     def conectar(self):
-        print("✅ Cámara SIMULADA conectada (webcam 640x480)")
+        print(" Cámara SIMULADA conectada (webcam 640x480)")
 
     def obtener_frames(self):
         ret, frame = self.webcam.read()
@@ -103,4 +103,4 @@ class CamaraSimulada:
 
     def cerrar(self):
         self.webcam.release()
-        print("📷 Cámara simulada cerrada")
+        print(" Cámara simulada cerrada")

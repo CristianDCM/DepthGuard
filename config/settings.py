@@ -14,7 +14,7 @@ def _cargar_env():
     ruta = os.path.join(_BASE_DIR, ".env")
 
     if not os.path.exists(ruta):
-        print("⚠️ Archivo .env no encontrado. Usando valores por defecto.")
+        print(" Archivo .env no encontrado. Usando valores por defecto.")
         print(f"   Esperado en: {ruta}")
         print(f"   Copia .env.example como .env")
         return {}

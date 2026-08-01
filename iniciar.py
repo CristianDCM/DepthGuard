@@ -40,14 +40,14 @@ os.makedirs(CAPTURAS_DIR, exist_ok=True)
 
 print()
 print("=" * 55)
-print("  🛡️  DEPTHGUARD — Nodo Edge")
+print("    DEPTHGUARD — Nodo Edge")
 print("  Sistema de Control de Acceso Biométrico 3D")
 print("=" * 55)
 print()
 
 # Verificar configuración de Supabase
 if not SUPABASE_URL:
-    print("❌ SUPABASE_URL no configurada en .env")
+    print(" SUPABASE_URL no configurada en .env")
     print("   Copia .env.example como .env y agrega tus credenciales")
     sys.exit(1)
 
@@ -123,12 +123,12 @@ hilo_cleanup = threading.Thread(
 hilo_cleanup.start()
 
 print()
-print(f"📷 Cámara: {MODO_CAMARA} ({camera_id} / {camera_type})")
-print(f"☁️  Supabase: {SUPABASE_URL[:40]}...")
-print(f"💓 Heartbeat: cada 30s")
-print(f"📡 Command Listener: polling cada 2s")
-print(f"📡 WebRTC: canal 'webrtc-signaling-{camera_id}'")
-print(f"🧹 Cleanup: cada 24h (retención: {DIAS_RETENCION} días)")
+print(f" Cámara: {MODO_CAMARA} ({camera_id} / {camera_type})")
+print(f"  Supabase: {SUPABASE_URL[:40]}...")
+print(f" Heartbeat: cada 30s")
+print(f" Command Listener: polling cada 2s")
+print(f" WebRTC: canal 'webrtc-signaling-{camera_id}'")
+print(f" Cleanup: cada 24h (retención: {DIAS_RETENCION} días)")
 print()
 print("Presiona Ctrl+C para detener")
 print()
@@ -138,6 +138,6 @@ try:
     while True:
         time.sleep(1)
 except KeyboardInterrupt:
-    print("\n⏹️  Apagando DepthGuard...")
+    print("\n  Apagando DepthGuard...")
     apagar_camaras()
-    print("🛑 DepthGuard detenido")
+    print(" DepthGuard detenido")

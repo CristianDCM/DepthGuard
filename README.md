@@ -1,4 +1,4 @@
-# 🛡️ DepthGuard — Nodo Edge
+#  DepthGuard — Nodo Edge
 
 Sistema de control de acceso biométrico con detección anti-spoofing 3D.
 
@@ -96,8 +96,8 @@ Configurar `MODO_CAMARA` en `.env`:
 
 ```
 DepthGuard/
-├── INSTALAR.bat               # 🔧 Instalador automático
-├── INICIAR.bat                # 🚀 Lanzador del sistema
+├── INSTALAR.bat               #  Instalador automático
+├── INICIAR.bat                #  Lanzador del sistema
 ├── iniciar.py                 # Punto de entrada (3 hilos)
 ├── config/
 │   └── settings.py            # Configuración (.env)

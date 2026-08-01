@@ -59,7 +59,7 @@ class ReconocedorFacial:
                     "embedding": np.array(emb)
                 })
 
-        print(f"   📦 Caché: {len(self.cache)} embeddings")
+        print(f"    Caché: {len(self.cache)} embeddings")
 
     def recargar_cache(self, usuarios):
         """Alias para actualizar después de registrar."""

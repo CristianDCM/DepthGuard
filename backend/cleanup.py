@@ -48,7 +48,7 @@ def _ejecutar_limpieza():
     fecha_limite = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=DIAS_RETENCION)
     fecha_iso = fecha_limite.isoformat()
 
-    print(f"🧹 Limpieza: eliminando datos anteriores a {fecha_limite.strftime('%Y-%m-%d %H:%M')} ({DIAS_RETENCION} días)")
+    print(f" Limpieza: eliminando datos anteriores a {fecha_limite.strftime('%Y-%m-%d %H:%M')} ({DIAS_RETENCION} días)")
 
     # 1. Obtener registros antiguos (en lotes de 100 para no sobrecargar)
     registros_eliminados = 0
@@ -64,10 +64,10 @@ def _ejecutar_limpieza():
         registros = resultado.data if resultado.data else []
 
         if not registros:
-            print("   ✅ No hay registros antiguos para limpiar")
+            print("    No hay registros antiguos para limpiar")
             return 0, 0
 
-        print(f"   📋 {len(registros)} registros encontrados para eliminar")
+        print(f"    {len(registros)} registros encontrados para eliminar")
 
         # 2. Eliminar fotos del Storage (en lotes)
         archivos_a_eliminar = []
@@ -85,7 +85,7 @@ def _ejecutar_limpieza():
                     supabase.storage.from_("capturas").remove(lote)
                     fotos_eliminadas += len(lote)
             except Exception as e:
-                print(f"   ⚠️ Error eliminando fotos del Storage: {e}")
+                print(f"    Error eliminando fotos del Storage: {e}")
                 # Continuar con la eliminación de registros aunque falle Storage
 
         # 3. Eliminar registros de la BD
@@ -104,7 +104,7 @@ def _ejecutar_limpieza():
         return registros_eliminados, fotos_eliminadas
 
     except Exception as e:
-        print(f"   ❌ Error durante la limpieza: {e}")
+        print(f"    Error durante la limpieza: {e}")
         traceback.print_exc()
         return registros_eliminados, fotos_eliminadas
 
@@ -114,7 +114,7 @@ def iniciar_cleanup(intervalo_horas: int = 24):
     Hilo daemon que ejecuta limpieza periódica.
     Se espera 60 segundos al arrancar para no interferir con la inicialización del sistema.
     """
-    print("🧹 Cleanup: iniciando (primera ejecución en 60s)")
+    print(" Cleanup: iniciando (primera ejecución en 60s)")
 
     # Esperar al arranque completo del sistema
     time.sleep(60)
@@ -126,16 +126,16 @@ def iniciar_cleanup(intervalo_horas: int = 24):
             duracion = round(time.time() - inicio, 1)
 
             if registros > 0 or fotos > 0:
-                print(f"   🧹 Limpieza completada en {duracion}s:")
-                print(f"      📋 {registros} registros del historial eliminados")
-                print(f"      📸 {fotos} fotos del Storage eliminadas")
+                print(f"    Limpieza completada en {duracion}s:")
+                print(f"       {registros} registros del historial eliminados")
+                print(f"       {fotos} fotos del Storage eliminadas")
             else:
-                print(f"   🧹 Limpieza completada en {duracion}s (nada que limpiar)")
+                print(f"    Limpieza completada en {duracion}s (nada que limpiar)")
 
         except Exception as e:
-            print(f"   ❌ Cleanup: error inesperado: {e}")
+            print(f"    Cleanup: error inesperado: {e}")
             traceback.print_exc()
 
         # Esperar hasta la próxima ejecución
-        print(f"   ⏰ Próxima limpieza en {intervalo_horas}h")
+        print(f"    Próxima limpieza en {intervalo_horas}h")
         time.sleep(intervalo_horas * 3600)

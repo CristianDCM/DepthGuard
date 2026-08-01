@@ -190,7 +190,7 @@ def _cargar_usuarios_supabase():
                 })
         return usuarios
     except Exception as e:
-        print(f"⚠️ Error cargando usuarios de Supabase: {e}")
+        print(f" Error cargando usuarios de Supabase: {e}")
         return []
 
 
@@ -220,13 +220,13 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
         except Exception as e:
             intentos += 1
             espera = min(intentos * 2, 30)
-            print(f"❌ Cámara: {e}. Reintento en {espera}s...")
+            print(f" Cámara: {e}. Reintento en {espera}s...")
             time.sleep(espera)
 
     # Cargar usuarios desde Supabase
     usuarios = _cargar_usuarios_supabase()
     reconocedor.cargar_cache(usuarios)
-    print(f"   👥 {len(usuarios)} usuarios cargados desde Supabase")
+    print(f"    {len(usuarios)} usuarios cargados desde Supabase")
 
     # Timers globales
     t_cache_refresh = time.time()
@@ -244,8 +244,8 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
     _fps_count = 0
     _fps_timer = time.time()
 
-    print("🟢 Pipeline IA activo (multi-rostro, máx 5)")
-    print("   📺 Ventana de preview abierta (presiona 'q' para cerrar)")
+    print(" Pipeline IA activo (multi-rostro, máx 5)")
+    print("    Ventana de preview abierta (presiona 'q' para cerrar)")
 
     try:
         while True:
@@ -360,7 +360,7 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                                     _reg_captura_flash = ahora
                                     _reg_dir_actual = None
                                     _reg_tiempo_inicio = 0
-                                    print(f"   📸 Registro: embedding {modo_registro.paso}/5 capturado (ángulo: {angulo_solicitado})")
+                                    print(f"    Registro: embedding {modo_registro.paso}/5 capturado (ángulo: {angulo_solicitado})")
 
                             captura_reciente = (ahora - _reg_captura_flash) < 0.8
                             track_dict = track.to_vis_dict()
@@ -507,7 +507,7 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                     t.sesion_sujeto = None
                     t.nombre = None
                     t.confianza = 0
-                print(f"   🔄 Caché recargada (registro): {len(usuarios)} usuarios")
+                print(f"    Caché recargada (registro): {len(usuarios)} usuarios")
 
             # Recargar caché si fue invalidada externamente
             if cache_invalidada.is_set():
@@ -520,7 +520,7 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                     t.sesion_sujeto = None
                     t.nombre = None
                     t.confianza = 0
-                print(f"   🔄 Caché recargada (invalidación externa): {len(usuarios)} usuarios")
+                print(f"    Caché recargada (invalidación externa): {len(usuarios)} usuarios")
 
             # Recarga periódica automática cada 60s
             if ahora - t_cache_refresh >= CACHE_REFRESH_INTERVAL:
@@ -544,7 +544,7 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
             _dormir_hasta_fps(frame_start, MIN_FRAME_TIME)
 
     except Exception as e:
-        print(f"❌ Error pipeline: {e}")
+        print(f" Error pipeline: {e}")
         import traceback
         traceback.print_exc()
 

@@ -166,7 +166,7 @@ def _enviar_a_supabase(supabase, registro: dict):
         # FK violation: usuario fue eliminado desde el frontend
         # Limpiar usuario_id y reintentar para no perder el evento
         if "23503" in error_str or "foreign key" in error_str.lower():
-            print(f"[Sync] ⚠️ Usuario eliminado — limpiando referencia y reintentando")
+            print(f"[Sync]  Usuario eliminado — limpiando referencia y reintentando")
             registro["usuario_id"] = None
             registro["nombre"] = f"{registro.get('nombre', '?')} (eliminado)"
 
@@ -176,7 +176,7 @@ def _enviar_a_supabase(supabase, registro: dict):
 
             try:
                 supabase.table("historial").insert(registro).execute()
-                print(f"[Sync] ✅ Evento guardado sin usuario_id")
+                print(f"[Sync]  Evento guardado sin usuario_id")
                 return
             except Exception as e2:
                 print(f"[Sync] Error en reintento sin FK: {e2}")
