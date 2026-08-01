@@ -129,15 +129,15 @@ def _asociar_detecciones(tracks, detecciones, umbral=120):
     """
     Asocia detecciones nuevas con tracks existentes por distancia de centroide.
     
-    Retorna:
-        matched: lista de (track, bbox, angulo, direccion)
-        unmatched_dets: lista de (bbox, angulo, direccion) sin track
+    Retorna lista de (track_o_None, bbox, angulo, direccion).
+    track=None significa detección nueva (persona que acaba de aparecer).
     """
     if not tracks:
-        return [], detecciones
+        # Sin tracks: todas son detecciones nuevas
+        return [(None, bbox, ang, dir) for bbox, ang, dir in detecciones]
 
     usados = set()
-    matched = []
+    resultado = []
 
     for det in detecciones:
         bbox_det, angulo, direccion = det
@@ -154,12 +154,11 @@ def _asociar_detecciones(tracks, detecciones, umbral=120):
 
         if mejor_track is not None:
             usados.add(mejor_track.id)
-            matched.append((mejor_track, bbox_det, angulo, direccion))
-        else:
-            # Nueva persona
-            matched.append((None, bbox_det, angulo, direccion))
 
-    return matched, []
+        # track=None si no se encontró match (persona nueva)
+        resultado.append((mejor_track, bbox_det, angulo, direccion))
+
+    return resultado
 
 
 def _guardar_foto(imagen, prefijo):
@@ -295,7 +294,7 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                 continue
 
             # === ASOCIAR detecciones con tracks existentes ===
-            matched, _ = _asociar_detecciones(tracks_activos, detecciones)
+            matched = _asociar_detecciones(tracks_activos, detecciones)
 
             tracks_frame = []  # Tracks para este frame
 
