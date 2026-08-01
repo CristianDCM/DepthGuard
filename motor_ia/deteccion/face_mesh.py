@@ -1,14 +1,14 @@
-"""Detección facial con MediaPipe Face Mesh (multi-ángulo)."""
+"""Detección facial con MediaPipe Face Mesh (multi-rostro)."""
 
 import mediapipe as mp
 
 
 class DetectorFaceMesh:
 
-    def __init__(self):
+    def __init__(self, max_rostros=5):
         self.face_mesh = mp.solutions.face_mesh.FaceMesh(
             static_image_mode=False,
-            max_num_faces=1,
+            max_num_faces=max_rostros,
             refine_landmarks=False,
             min_detection_confidence=0.4,
             min_tracking_confidence=0.4
@@ -17,9 +17,12 @@ class DetectorFaceMesh:
 
     def detectar(self, imagen_rgb):
         """
-        Retorna (encontrada, bbox, angulo, direccion).
-        bbox = (x, y, x2, y2) o None
-        direccion puede ser: "frontal", "izquierda", "derecha", "arriba", "abajo"
+        Detecta todos los rostros visibles en el frame.
+
+        Retorna lista de tuplas (bbox, angulo_h, direccion) por cada rostro.
+        Lista vacía si no hay rostros.
+        bbox = (x, y, x2, y2)
+        direccion: "frontal", "izquierda", "derecha", "arriba", "abajo"
         """
         alto, ancho = imagen_rgb.shape[:2]
         # Optimización oficial MediaPipe: evita copia interna del array
@@ -28,13 +31,15 @@ class DetectorFaceMesh:
         imagen_rgb.flags.writeable = True
 
         if not resultado.multi_face_landmarks:
-            return False, None, 0, "ninguno"
+            return []
 
-        landmarks = resultado.multi_face_landmarks[0]
-        bbox = self._calcular_bbox(landmarks, ancho, alto)
-        angulo_h, angulo_v, direccion = self._calcular_angulo(landmarks, ancho, alto)
+        rostros = []
+        for landmarks in resultado.multi_face_landmarks:
+            bbox = self._calcular_bbox(landmarks, ancho, alto)
+            angulo_h, angulo_v, direccion = self._calcular_angulo(landmarks, ancho, alto)
+            rostros.append((bbox, angulo_h, direccion))
 
-        return True, bbox, angulo_h, direccion
+        return rostros
 
     def _calcular_bbox(self, landmarks, ancho, alto):
         xs = []
@@ -91,15 +96,11 @@ class DetectorFaceMesh:
             return angulo_h, 0, "frontal"
 
         # Posición relativa de la nariz entre ojos y mentón
-        # Si la nariz está más arriba (cabeza mirando hacia arriba), despl_v es negativo
-        # Si la nariz está más abajo (cabeza mirando hacia abajo), despl_v es positivo
         ratio_nariz = (nariz_y - centro_ojos_y) / dist_vertical
-        # Valor esperado ~0.4-0.5 cuando el rostro es frontal
         despl_v = (ratio_nariz - 0.45) * 100
         angulo_v = round(despl_v, 1)
 
         # Determinar dirección predominante
-        # El vertical tiene prioridad menor; solo se reporta si el horizontal es frontal
         umbral_h = 10
         umbral_v = 8
 

@@ -2,6 +2,9 @@
 Orquestador principal del Motor IA.
 Cámara → Detección → Anti-spoofing → Reconocimiento
 Envía resultados al Backend por queue.Queue
+
+Soporta detección simultánea de hasta 5 personas,
+cada una con su propio estado de sesión independiente.
 """
 
 import time
@@ -33,14 +36,130 @@ MIN_FRAME_TIME = 1.0 / TARGET_FPS
 TIEMPO_ESTABILIZACION = 1.0
 
 # Intervalo de recarga automática de caché (segundos)
-# Detecta eliminaciones de usuarios hechas desde el frontend
 CACHE_REFRESH_INTERVAL = 60
 
 # Intervalo entre snapshots para preview en vivo (segundos)
 SNAPSHOT_INTERVAL = 2.0
 
-# Evento global para forzar recarga de caché desde otros hilos (ej: sync)
+# Evento global para forzar recarga de caché desde otros hilos
 cache_invalidada = threading.Event()
+
+# Timeout para considerar que una persona se fue (segundos)
+_SESION_TIMEOUT = 30
+
+
+# ======================================================================
+# PersonaTrack: estado independiente por cada persona detectada
+# ======================================================================
+
+class PersonaTrack:
+    """Estado de seguimiento para una persona individual en el frame."""
+
+    def __init__(self, bbox, angulo, direccion):
+        # Posición actual
+        self.bbox = bbox
+        self.angulo = angulo
+        self.direccion = direccion
+
+        # Anti-spoofing
+        self.spoofing_cache = None   # (es_real, es_dist, motivo, metricas)
+        self.t_spoofing = 0
+
+        # Reconocimiento
+        self.nombre = None
+        self.confianza = 0
+        self.usuario_id = None
+        self.t_embedding = 0
+
+        # Sesión (evitar eventos repetidos)
+        self.sesion_tipo = None      # "ACCESO_PERMITIDO", "DESCONOCIDO", "FRAUDE"
+        self.sesion_sujeto = None
+
+        # Tracking
+        self.ultimo_visto = time.time()
+        self.id = id(self)  # Identificador único del track
+
+    def centroide(self):
+        """Retorna (cx, cy) del centro del bbox."""
+        x, y, x2, y2 = self.bbox
+        return ((x + x2) / 2, (y + y2) / 2)
+
+    def actualizar_posicion(self, bbox, angulo, direccion):
+        """Actualiza la posición del track con la nueva detección."""
+        self.bbox = bbox
+        self.angulo = angulo
+        self.direccion = direccion
+        self.ultimo_visto = time.time()
+
+    def esta_activo(self, ahora):
+        """Retorna True si el track sigue activo (no ha expirado)."""
+        return (ahora - self.ultimo_visto) < _SESION_TIMEOUT
+
+    def to_vis_dict(self):
+        """Convierte el track a dict para visualización."""
+        es_real = True
+        es_dist = False
+        motivo = ""
+        metricas = {}
+
+        if self.spoofing_cache:
+            es_real, es_dist, motivo, metricas = self.spoofing_cache
+
+        return {
+            "bbox": self.bbox,
+            "es_real": es_real,
+            "es_dist": es_dist,
+            "motivo": motivo,
+            "metricas": metricas,
+            "nombre": self.nombre,
+            "confianza": self.confianza,
+        }
+
+
+def _distancia_centroides(bbox_a, bbox_b):
+    """Distancia euclidiana entre los centroides de dos bboxes."""
+    cx_a = (bbox_a[0] + bbox_a[2]) / 2
+    cy_a = (bbox_a[1] + bbox_a[3]) / 2
+    cx_b = (bbox_b[0] + bbox_b[2]) / 2
+    cy_b = (bbox_b[1] + bbox_b[3]) / 2
+    return ((cx_a - cx_b) ** 2 + (cy_a - cy_b) ** 2) ** 0.5
+
+
+def _asociar_detecciones(tracks, detecciones, umbral=120):
+    """
+    Asocia detecciones nuevas con tracks existentes por distancia de centroide.
+    
+    Retorna:
+        matched: lista de (track, bbox, angulo, direccion)
+        unmatched_dets: lista de (bbox, angulo, direccion) sin track
+    """
+    if not tracks:
+        return [], detecciones
+
+    usados = set()
+    matched = []
+
+    for det in detecciones:
+        bbox_det, angulo, direccion = det
+        mejor_dist = umbral
+        mejor_track = None
+
+        for track in tracks:
+            if track.id in usados:
+                continue
+            dist = _distancia_centroides(track.bbox, bbox_det)
+            if dist < mejor_dist:
+                mejor_dist = dist
+                mejor_track = track
+
+        if mejor_track is not None:
+            usados.add(mejor_track.id)
+            matched.append((mejor_track, bbox_det, angulo, direccion))
+        else:
+            # Nueva persona
+            matched.append((None, bbox_det, angulo, direccion))
+
+    return matched, []
 
 
 def _guardar_foto(imagen, prefijo):
@@ -81,14 +200,12 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
     Bucle principal. Corre en un hilo separado.
     modo_registro: instancia de EstadoRegistro (thread-safe).
     db_manager: legacy, ya no se usa (los usuarios se cargan de Supabase).
-    frame_provider: instancia de FrameProvider (opcional). Si se pasa,
-        el último frame renderizado se entrega al servidor WebRTC vía
-        un buffer thread-safe. El pipeline NO usa asyncio en ningún momento.
+    frame_provider: instancia de FrameProvider (opcional).
     """
 
     # Crear componentes
     camara = crear_camara()
-    detector = DetectorFaceMesh()
+    detector = DetectorFaceMesh(max_rostros=5)
     antispoofing = VerificadorAntiSpoofing()
     reconocedor = ReconocedorFacial()
 
@@ -112,41 +229,23 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
     reconocedor.cargar_cache(usuarios)
     print(f"   👥 {len(usuarios)} usuarios cargados desde Supabase")
 
-    # Timers
-    t_embedding = 0
-    t_spoofing = 0
-    t_cache_refresh = time.time()  # Para recarga periódica de caché
-    t_snapshot = 0                 # Para snapshots de preview en vivo
+    # Timers globales
+    t_cache_refresh = time.time()
+    t_snapshot = 0
 
-    # Cache
-    spoofing_cache = None
+    # Tracks activos (lista de PersonaTrack)
+    tracks_activos = []
 
-    # Estado para preview
-    nombre_actual = None
-    confianza_actual = 0
-
-    # Estado de estabilización para registro
-    _reg_dir_actual = None       # Última dirección detectada durante registro
-    _reg_tiempo_inicio = 0       # Cuándo empezó a mirar en la dirección correcta
-    _reg_captura_flash = 0       # Timestamp del flash verde de captura exitosa
+    # Estado de estabilización para registro (1 persona a la vez)
+    _reg_dir_actual = None
+    _reg_tiempo_inicio = 0
+    _reg_captura_flash = 0
 
     # FPS counter para debug
     _fps_count = 0
     _fps_timer = time.time()
 
-    # === Tracking de sesión de presencia ===
-    # Evita emitir eventos repetidos para la misma persona parada frente a la cámara.
-    # Solo emite un nuevo evento cuando:
-    #   1. Cambia el sujeto (persona diferente)
-    #   2. Cambia el estado (de ACCESO a FRAUDE, etc.)
-    #   3. El rostro desaparece por >30s y vuelve
-    _sesion_tipo = None          # "ACCESO_PERMITIDO", "DESCONOCIDO", "FRAUDE" o None
-    _sesion_sujeto = None        # nombre del sujeto actual (None = desconocido)
-    _sesion_usuario_id = None    # ID del usuario de la sesión actual
-    _ultimo_rostro_visto = 0     # Timestamp de la última vez que se vio un rostro
-    _SESION_TIMEOUT = 30         # Segundos sin rostro para considerar que la persona se fue
-
-    print("🟢 Pipeline IA activo")
+    print("🟢 Pipeline IA activo (multi-rostro, máx 5)")
     print("   📺 Ventana de preview abierta (presiona 'q' para cerrar)")
 
     try:
@@ -172,21 +271,17 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
 
             imagen_rgb = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
 
-            # === DETECCIÓN (cada frame) ===
-            encontrada, bbox, angulo, direccion = detector.detectar(imagen_rgb)
+            # === DETECCIÓN (cada frame) — retorna lista de rostros ===
+            detecciones = detector.detectar(imagen_rgb)
 
-            if not encontrada:
-                # Resetear estabilización si se pierde el rostro
+            # Limpiar tracks expirados
+            tracks_activos = [t for t in tracks_activos if t.esta_activo(ahora)]
+
+            if not detecciones:
+                # Sin rostros: resetear estabilización de registro
                 _reg_dir_actual = None
                 _reg_tiempo_inicio = 0
 
-                # Si el rostro desapareció por más del timeout, resetear sesión
-                if _sesion_tipo is not None and (ahora - _ultimo_rostro_visto) >= _SESION_TIMEOUT:
-                    _sesion_tipo = None
-                    _sesion_sujeto = None
-                    _sesion_usuario_id = None
-
-                # Mostrar frame sin detección (reusar frame directamente)
                 cv2.putText(color, "DEPTHGUARD - Preview", (10, 25),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
                 msg_sin_rostro = "Sin rostro detectado"
@@ -196,175 +291,203 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 100), 1)
                 if mostrar_preview(color):
                     break
-                # Limitar FPS cuando no hay rostro (menos urgencia)
                 _dormir_hasta_fps(frame_start, MIN_FRAME_TIME * 2)
                 continue
 
-            # Marcar que estamos viendo un rostro ahora
-            _ultimo_rostro_visto = ahora
+            # === ASOCIAR detecciones con tracks existentes ===
+            matched, _ = _asociar_detecciones(tracks_activos, detecciones)
 
-            # Si cámara simulada: generar profundidad a partir del bbox ya detectado
-            if _es_simulada and bbox is not None:
-                camara.actualizar_profundidad(bbox)
-                profundidad = camara._prof_cache if camara._prof_cache is not None else profundidad
+            tracks_frame = []  # Tracks para este frame
 
-            # === ANTI-SPOOFING (cada 0.3s) ===
-            if ahora - t_spoofing >= COOLDOWN_ANTISPOOFING:
-                t_spoofing = ahora
-                es_real, es_dist, motivo, metricas = antispoofing.verificar(
-                    profundidad, bbox
-                )
-                metricas["angulo"] = angulo
-                metricas["direccion"] = direccion
-                spoofing_cache = (es_real, es_dist, motivo, metricas)
+            for match in matched:
+                track_existente, bbox, angulo, direccion = match
 
-            if spoofing_cache is None:
-                # Mostrar preview básico mientras se analiza
-                vista = dibujar_preview(
-                    color, bbox, True, False, "Analizando...", {},
-                    None, 0, modo_registro.activo
-                )
-                if mostrar_preview(vista):
-                    break
-                _dormir_hasta_fps(frame_start, MIN_FRAME_TIME)
-                continue
-
-            es_real, es_dist, motivo, metricas = spoofing_cache
-
-            # === REGISTRO CON GUIADO DE ÁNGULOS ===
-            if modo_registro.activo and es_real:
-                angulo_solicitado = modo_registro.angulo_solicitado
-                angulo_ok = (direccion == angulo_solicitado)
-                captura_reciente = (ahora - _reg_captura_flash) < 0.8  # flash 0.8s
-
-                # Lógica de estabilización
-                if angulo_ok:
-                    if _reg_dir_actual != angulo_solicitado:
-                        # Acaba de girar a la dirección correcta
-                        _reg_dir_actual = angulo_solicitado
-                        _reg_tiempo_inicio = ahora
-                    
-                    tiempo_estable = ahora - _reg_tiempo_inicio
-
-                    # Capturar cuando está estable el tiempo suficiente
-                    if tiempo_estable >= TIEMPO_ESTABILIZACION and modo_registro.puede_capturar():
-                        embedding = reconocedor.generar_embedding(imagen_rgb, bbox)
-                        if embedding is not None:
-                            modo_registro.registrar_captura(embedding, angulo_solicitado)
-                            paso = modo_registro.paso
-                            _reg_captura_flash = ahora
-                            _reg_dir_actual = None  # Reset para siguiente ángulo
-                            _reg_tiempo_inicio = 0
-                            print(f"   📸 Registro: embedding {paso}/5 capturado (ángulo: {angulo_solicitado})")
+                if track_existente is not None:
+                    # Track existente: actualizar posición
+                    track_existente.actualizar_posicion(bbox, angulo, direccion)
+                    track = track_existente
                 else:
-                    # No está mirando en la dirección correcta
-                    _reg_dir_actual = None
-                    _reg_tiempo_inicio = 0
-                    tiempo_estable = 0
+                    # Nuevo track
+                    track = PersonaTrack(bbox, angulo, direccion)
+                    tracks_activos.append(track)
 
-                # Info para visualización
-                registro_info = {
-                    "angulo_solicitado": angulo_solicitado,
+                # Si cámara simulada: generar profundidad a partir del bbox
+                if _es_simulada and bbox is not None:
+                    camara.actualizar_profundidad(bbox)
+                    profundidad = camara._prof_cache if camara._prof_cache is not None else profundidad
+
+                # === MODO REGISTRO (solo la persona más grande/cercana) ===
+                if modo_registro.activo:
+                    # Solo procesar la persona con el bbox más grande (más cercana)
+                    if track == _persona_mas_grande(tracks_activos):
+                        es_real_reg = True
+                        if track.spoofing_cache:
+                            es_real_reg = track.spoofing_cache[0]
+
+                        # Anti-spoofing para registro
+                        if ahora - track.t_spoofing >= COOLDOWN_ANTISPOOFING:
+                            track.t_spoofing = ahora
+                            es_real, es_dist, motivo, metricas = antispoofing.verificar(
+                                profundidad, bbox
+                            )
+                            metricas["angulo"] = angulo
+                            metricas["direccion"] = direccion
+                            track.spoofing_cache = (es_real, es_dist, motivo, metricas)
+                            es_real_reg = es_real
+
+                        if es_real_reg:
+                            _procesar_registro(
+                                track, modo_registro, reconocedor, imagen_rgb,
+                                ahora, _reg_dir_actual, _reg_tiempo_inicio,
+                                _reg_captura_flash
+                            )
+                            # Actualizar estado de estabilización
+                            angulo_solicitado = modo_registro.angulo_solicitado
+                            angulo_ok = (direccion == angulo_solicitado)
+                            if angulo_ok:
+                                if _reg_dir_actual != angulo_solicitado:
+                                    _reg_dir_actual = angulo_solicitado
+                                    _reg_tiempo_inicio = ahora
+                            else:
+                                _reg_dir_actual = None
+                                _reg_tiempo_inicio = 0
+
+                            # Verificar captura
+                            tiempo_estable = ahora - _reg_tiempo_inicio if _reg_dir_actual else 0
+                            if angulo_ok and tiempo_estable >= TIEMPO_ESTABILIZACION and modo_registro.puede_capturar():
+                                embedding = reconocedor.generar_embedding(imagen_rgb, bbox)
+                                if embedding is not None:
+                                    modo_registro.registrar_captura(embedding, angulo_solicitado)
+                                    _reg_captura_flash = ahora
+                                    _reg_dir_actual = None
+                                    _reg_tiempo_inicio = 0
+                                    print(f"   📸 Registro: embedding {modo_registro.paso}/5 capturado (ángulo: {angulo_solicitado})")
+
+                            captura_reciente = (ahora - _reg_captura_flash) < 0.8
+                            track_dict = track.to_vis_dict()
+                            track_dict["registro_info"] = {
+                                "angulo_solicitado": angulo_solicitado,
+                                "paso": modo_registro.paso,
+                                "angulo_ok": angulo_ok,
+                                "estabilizado": angulo_ok and tiempo_estable >= TIEMPO_ESTABILIZACION * 0.5,
+                                "tiempo_estable": tiempo_estable,
+                                "captura_reciente": captura_reciente,
+                                "angulos_capturados": modo_registro.angulos_capturados,
+                                "nombre": modo_registro.nombre,
+                            }
+                            tracks_frame.append(track_dict)
+                        else:
+                            tracks_frame.append(track.to_vis_dict())
+                    else:
+                        # Otras personas durante registro: mostrar bbox gris
+                        tracks_frame.append(track.to_vis_dict())
+                    continue
+
+                # === MODO NORMAL: Anti-spoofing + Reconocimiento por persona ===
+
+                # Anti-spoofing (cada COOLDOWN_ANTISPOOFING por persona)
+                if ahora - track.t_spoofing >= COOLDOWN_ANTISPOOFING:
+                    track.t_spoofing = ahora
+                    es_real, es_dist, motivo, metricas = antispoofing.verificar(
+                        profundidad, bbox
+                    )
+                    metricas["angulo"] = angulo
+                    metricas["direccion"] = direccion
+                    track.spoofing_cache = (es_real, es_dist, motivo, metricas)
+
+                if track.spoofing_cache is None:
+                    tracks_frame.append(track.to_vis_dict())
+                    continue
+
+                es_real, es_dist, motivo, metricas = track.spoofing_cache
+
+                # === FRAUDE ===
+                if not es_real and not es_dist:
+                    if track.sesion_tipo != "FRAUDE":
+                        track.sesion_tipo = "FRAUDE"
+                        track.sesion_sujeto = None
+                        track.usuario_id = None
+                        ruta = _guardar_foto(color, "fraude")
+                        cola_eventos.put({
+                            "tipo": "FRAUDE",
+                            "motivo": motivo,
+                            "metricas": metricas,
+                            "foto_ruta": ruta,
+                            "frame": color.copy()
+                        })
+
+                # === DISTANCIA ===
+                elif es_dist:
+                    pass  # Solo se muestra en preview
+
+                # === RECONOCIMIENTO (cada COOLDOWN_EMBEDDING por persona) ===
+                elif ahora - track.t_embedding >= COOLDOWN_EMBEDDING:
+                    track.t_embedding = ahora
+
+                    embedding = reconocedor.generar_embedding(imagen_rgb, bbox)
+                    if embedding is not None:
+                        nombre, confianza, usuario_id = reconocedor.buscar(embedding)
+                        track.nombre = nombre
+                        track.confianza = confianza
+                        track.usuario_id = usuario_id
+
+                        if nombre:
+                            es_nuevo = (
+                                track.sesion_tipo != "ACCESO_PERMITIDO" or
+                                track.sesion_sujeto != nombre
+                            )
+                            if es_nuevo:
+                                track.sesion_tipo = "ACCESO_PERMITIDO"
+                                track.sesion_sujeto = nombre
+                                ruta = _guardar_foto(color, "acceso")
+                                cola_eventos.put({
+                                    "tipo": "ACCESO_PERMITIDO",
+                                    "nombre": nombre,
+                                    "usuario_id": usuario_id,
+                                    "confianza": confianza,
+                                    "metricas": metricas,
+                                    "foto_ruta": ruta,
+                                    "frame": color.copy()
+                                })
+                        else:
+                            if track.sesion_tipo != "DESCONOCIDO":
+                                track.sesion_tipo = "DESCONOCIDO"
+                                track.sesion_sujeto = None
+                                track.usuario_id = None
+                                ruta = _guardar_foto(color, "desconocido")
+                                cola_eventos.put({
+                                    "tipo": "DESCONOCIDO",
+                                    "metricas": metricas,
+                                    "foto_ruta": ruta,
+                                    "frame": color.copy()
+                                })
+
+                tracks_frame.append(track.to_vis_dict())
+
+            # === VISUALIZACIÓN ===
+            registro_info_global = None
+            if modo_registro.activo:
+                registro_info_global = {
+                    "angulo_solicitado": modo_registro.angulo_solicitado,
                     "paso": modo_registro.paso,
-                    "angulo_ok": angulo_ok,
-                    "estabilizado": angulo_ok and (ahora - _reg_tiempo_inicio) >= TIEMPO_ESTABILIZACION * 0.5,
-                    "tiempo_estable": (ahora - _reg_tiempo_inicio) if angulo_ok and _reg_tiempo_inicio > 0 else 0,
-                    "captura_reciente": captura_reciente,
                     "angulos_capturados": modo_registro.angulos_capturados,
                     "nombre": modo_registro.nombre,
+                    "angulo_ok": _reg_dir_actual is not None,
+                    "captura_reciente": (ahora - _reg_captura_flash) < 0.8,
                 }
 
-                vista = dibujar_preview(
-                    color, bbox, es_real, es_dist, motivo, metricas,
-                    modo_registro.nombre, 0, True,
-                    registro_info=registro_info
-                )
-                if mostrar_preview(vista):
-                    break
-                _dormir_hasta_fps(frame_start, MIN_FRAME_TIME)
-                continue
-
-            # === FRAUDE ===
-            if not es_real and not es_dist:
-                # Solo emitir si es una situación nueva (no estaba en FRAUDE)
-                if _sesion_tipo != "FRAUDE":
-                    _sesion_tipo = "FRAUDE"
-                    _sesion_sujeto = None
-                    _sesion_usuario_id = None
-                    ruta = _guardar_foto(color, "fraude")
-                    cola_eventos.put({
-                        "tipo": "FRAUDE",
-                        "motivo": motivo,
-                        "metricas": metricas,
-                        "foto_ruta": ruta,
-                        "frame": color.copy()
-                    })
-                nombre_actual = None
-
-            # === DISTANCIA ===
-            elif es_dist:
-                pass  # Solo se muestra en preview
-
-            # === RECONOCIMIENTO (cada 2s) ===
-            elif ahora - t_embedding >= COOLDOWN_EMBEDDING:
-                t_embedding = ahora
-
-                embedding = reconocedor.generar_embedding(imagen_rgb, bbox)
-                if embedding is not None:
-                    nombre, confianza, usuario_id = reconocedor.buscar(embedding)
-                    nombre_actual = nombre
-                    confianza_actual = confianza
-
-                    if nombre:
-                        # Solo emitir evento si es un sujeto diferente
-                        # o la sesión había expirado
-                        es_nuevo = (
-                            _sesion_tipo != "ACCESO_PERMITIDO" or
-                            _sesion_sujeto != nombre
-                        )
-                        if es_nuevo:
-                            _sesion_tipo = "ACCESO_PERMITIDO"
-                            _sesion_sujeto = nombre
-                            _sesion_usuario_id = usuario_id
-                            ruta = _guardar_foto(color, "acceso")
-                            cola_eventos.put({
-                                "tipo": "ACCESO_PERMITIDO",
-                                "nombre": nombre,
-                                "usuario_id": usuario_id,
-                                "confianza": confianza,
-                                "metricas": metricas,
-                                "foto_ruta": ruta,
-                                "frame": color.copy()
-                            })
-                    else:
-                        # Solo emitir DESCONOCIDO una vez por sesión
-                        if _sesion_tipo != "DESCONOCIDO":
-                            _sesion_tipo = "DESCONOCIDO"
-                            _sesion_sujeto = None
-                            _sesion_usuario_id = None
-                            ruta = _guardar_foto(color, "desconocido")
-                            cola_eventos.put({
-                                "tipo": "DESCONOCIDO",
-                                "metricas": metricas,
-                                "foto_ruta": ruta,
-                                "frame": color.copy()
-                            })
-
-            # Preview unificado (un solo punto de render, sin .copy())
             vista = dibujar_preview(
-                color, bbox, es_real, es_dist, motivo, metricas,
-                nombre_actual, confianza_actual, modo_registro.activo
+                color, tracks_frame, modo_registro.activo,
+                registro_info=registro_info_global
             )
             if mostrar_preview(vista):
                 break
 
-            # === WEBRTC: actualizar FrameProvider (cada frame) ===
-            # Llamada síncrona y thread-safe. No bloquea el pipeline.
+            # === WEBRTC: actualizar FrameProvider ===
             if frame_provider is not None:
                 frame_provider.update_frame(vista.copy())
 
             # === SNAPSHOT para preview en vivo (cada 2s) ===
-            # snapshot_uploader.py se conserva intacto como fallback.
             if ahora - t_snapshot >= SNAPSHOT_INTERVAL:
                 t_snapshot = ahora
                 threading.Thread(
@@ -378,35 +501,38 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                 usuarios = _cargar_usuarios_supabase()
                 reconocedor.recargar_cache(usuarios)
                 modo_registro.recargar_cache = False
-                t_cache_refresh = ahora  # Reset timer
+                t_cache_refresh = ahora
+                # Resetear tracks para re-evaluar
+                for t in tracks_activos:
+                    t.sesion_tipo = None
+                    t.sesion_sujeto = None
+                    t.nombre = None
+                    t.confianza = 0
                 print(f"   🔄 Caché recargada (registro): {len(usuarios)} usuarios")
 
-            # Recargar caché si fue invalidada externamente (ej: FK error en sync)
+            # Recargar caché si fue invalidada externamente
             if cache_invalidada.is_set():
                 cache_invalidada.clear()
                 usuarios = _cargar_usuarios_supabase()
                 reconocedor.recargar_cache(usuarios)
                 t_cache_refresh = ahora
-                nombre_actual = None
-                confianza_actual = 0
-                # Resetear sesión para re-evaluar el rostro actual
-                _sesion_tipo = None
-                _sesion_sujeto = None
-                _sesion_usuario_id = None
+                for t in tracks_activos:
+                    t.sesion_tipo = None
+                    t.sesion_sujeto = None
+                    t.nombre = None
+                    t.confianza = 0
                 print(f"   🔄 Caché recargada (invalidación externa): {len(usuarios)} usuarios")
 
             # Recarga periódica automática cada 60s
-            # Detecta eliminaciones de usuarios desde el frontend
             if ahora - t_cache_refresh >= CACHE_REFRESH_INTERVAL:
                 t_cache_refresh = ahora
                 usuarios = _cargar_usuarios_supabase()
                 reconocedor.recargar_cache(usuarios)
-                nombre_actual = None
-                confianza_actual = 0
-                # Resetear sesión para re-evaluar
-                _sesion_tipo = None
-                _sesion_sujeto = None
-                _sesion_usuario_id = None
+                for t in tracks_activos:
+                    t.sesion_tipo = None
+                    t.sesion_sujeto = None
+                    t.nombre = None
+                    t.confianza = 0
 
             # FPS debug (cada 3 segundos)
             _fps_count += 1
@@ -427,6 +553,19 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
         cv2.destroyAllWindows()
         detector.cerrar()
         camara.cerrar()
+
+
+def _persona_mas_grande(tracks):
+    """Retorna el track con el bbox más grande (persona más cercana)."""
+    if not tracks:
+        return None
+    return max(tracks, key=lambda t: (t.bbox[2] - t.bbox[0]) * (t.bbox[3] - t.bbox[1]))
+
+
+def _procesar_registro(track, modo_registro, reconocedor, imagen_rgb, ahora,
+                        reg_dir, reg_tiempo, reg_flash):
+    """Helper para procesamiento de registro (placeholder para lógica inline)."""
+    pass  # La lógica se maneja inline en el bucle principal
 
 
 def _dormir_hasta_fps(frame_start, target_time):
