@@ -74,7 +74,7 @@ def _dibujar_persona(vista, track, en_registro):
         captura_reciente = reg_info.get("captura_reciente", False)
 
         if captura_reciente:
-            color_bbox = (0, 255, 0)
+            color_bbox = (50, 255, 50) # Verde neón suave
             etiqueta = f"CAPTURADO {reg_info.get('paso', 0)}/5"
         elif angulo_ok:
             color_bbox = (0, 255, 255)
@@ -87,41 +87,104 @@ def _dibujar_persona(vista, track, en_registro):
         color_bbox = (255, 165, 0)
         etiqueta = "REGISTRO"
     elif not es_real and not es_dist:
-        color_bbox = (0, 0, 255)
+        color_bbox = (30, 30, 255) # Rojo vibrante
         etiqueta = f"FRAUDE: {motivo}"
     elif es_dist:
-        color_bbox = (0, 165, 255)
+        color_bbox = (0, 165, 255) # Naranja alerta
         etiqueta = motivo
     elif nombre:
-        color_bbox = (0, 255, 0)
+        color_bbox = (50, 255, 50) # Verde neón suave
         etiqueta = f"{nombre} ({confianza * 100:.1f}%)"
     elif es_real:
         color_bbox = (0, 255, 255)
         etiqueta = "Persona no registrada"
     else:
-        color_bbox = (128, 128, 128)
+        color_bbox = (150, 150, 150)
         etiqueta = "Analizando..."
 
-    # Dibujar bbox
-    cv2.rectangle(vista, (x, y), (x2, y2), color_bbox, 2)
+    # Extraer dimensiones de la pantalla para evitar que los textos salgan del frame
+    img_h, img_w = vista.shape[:2]
 
-    # Fondo para etiqueta
-    tam, _ = cv2.getTextSize(etiqueta, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
-    cv2.rectangle(vista, (x, y - 28), (x + tam[0] + 8, y), color_bbox, -1)
-    cv2.putText(vista, etiqueta, (x + 4, y - 8),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 0), 2)
+    # 1. Dibujar Bounding Box estilo HUD Táctico (Esquinas)
+    _dibujar_esquinas(vista, x, y, x2, y2, color_bbox, 2)
 
-    # Métricas debajo del bbox de cada persona
+    # 2. Retículo central de profundidad (Crosshair)
+    cx, cy = x + (x2 - x) // 2, y + (y2 - y) // 2
+    cv2.line(vista, (cx - 6, cy), (cx + 6, cy), color_bbox, 1, cv2.LINE_AA)
+    cv2.line(vista, (cx, cy - 6), (cx, cy + 6), color_bbox, 1, cv2.LINE_AA)
+
+    # 3. Etiqueta Superior (Nombre/Estado)
+    font = cv2.FONT_HERSHEY_DUPLEX
+    font_scale = 0.5
+    tam, _ = cv2.getTextSize(etiqueta, font, font_scale, 1)
+    
+    # Clamping superior: Evitar que se pierda por arriba o por la derecha
+    label_y = y
+    if label_y - tam[1] - 14 < 0:
+        label_y = tam[1] + 14
+        
+    label_x = x
+    if label_x + tam[0] + 12 > img_w:
+        label_x = img_w - tam[0] - 12
+    if label_x < 0: label_x = 0
+
+    # Fondo negro mate sólido para máximo contraste
+    cv2.rectangle(vista, (label_x, label_y - tam[1] - 14), (label_x + tam[0] + 12, label_y), (15, 15, 15), -1)
+    # Borde superior de acento
+    cv2.line(vista, (label_x, label_y - tam[1] - 14), (label_x + tam[0] + 12, label_y - tam[1] - 14), color_bbox, 2, cv2.LINE_AA)
+    
+    # Texto con Anti-Aliasing
+    cv2.putText(vista, etiqueta, (label_x + 6, label_y - 7), font, font_scale, color_bbox, 1, cv2.LINE_AA)
+
+    # 4. Panel de Métricas Inferiores
     if metricas and not en_registro:
         textos = []
         if "distancia" in metricas:
-            textos.append(f"Dist:{metricas['distancia']}cm")
+            textos.append(f"Dist: {metricas['distancia']}cm")
         if "direccion" in metricas:
-            textos.append(f"Dir:{metricas['direccion']}")
+            textos.append(f"Dir: {metricas['direccion']}")
         if textos:
             info_text = " | ".join(textos)
-            cv2.putText(vista, info_text, (x, y2 + 18),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, color_bbox, 1)
+            font_metrics = cv2.FONT_HERSHEY_SIMPLEX
+            scale_m = 0.45
+            tam_m, _ = cv2.getTextSize(info_text, font_metrics, scale_m, 1)
+            
+            # Clamping inferior: Evitar que se pierda por abajo o por la derecha
+            metrics_y = y2
+            if metrics_y + tam_m[1] + 14 > img_h:
+                metrics_y = img_h - tam_m[1] - 14
+                
+            metrics_x = x
+            if metrics_x + tam_m[0] + 12 > img_w:
+                metrics_x = img_w - tam_m[0] - 12
+            if metrics_x < 0: metrics_x = 0
+
+            # Fondo negro mate inferior
+            cv2.rectangle(vista, (metrics_x, metrics_y), (metrics_x + tam_m[0] + 12, metrics_y + tam_m[1] + 14), (15, 15, 15), -1)
+            # Borde inferior de acento
+            cv2.line(vista, (metrics_x, metrics_y + tam_m[1] + 14), (metrics_x + tam_m[0] + 12, metrics_y + tam_m[1] + 14), color_bbox, 1, cv2.LINE_AA)
+            
+            # Texto blanco para alta legibilidad
+            cv2.putText(vista, info_text, (metrics_x + 6, metrics_y + tam_m[1] + 7),
+                        font_metrics, scale_m, (255, 255, 255), 1, cv2.LINE_AA)
+
+def _dibujar_esquinas(vista, x, y, x2, y2, color, thickness=2):
+    """Dibuja un bounding box estilo HUD táctico (solo esquinas) para aspecto profesional."""
+    w, h = x2 - x, y2 - y
+    l = max(10, min(30, int(min(w, h) * 0.2))) # Longitud adaptable al tamaño del rostro
+    
+    # Superior izquierda
+    cv2.line(vista, (x, y), (x + l, y), color, thickness, cv2.LINE_AA)
+    cv2.line(vista, (x, y), (x, y + l), color, thickness, cv2.LINE_AA)
+    # Superior derecha
+    cv2.line(vista, (x2, y), (x2 - l, y), color, thickness, cv2.LINE_AA)
+    cv2.line(vista, (x2, y), (x2, y + l), color, thickness, cv2.LINE_AA)
+    # Inferior izquierda
+    cv2.line(vista, (x, y2), (x + l, y2), color, thickness, cv2.LINE_AA)
+    cv2.line(vista, (x, y2), (x, y2 - l), color, thickness, cv2.LINE_AA)
+    # Inferior derecha
+    cv2.line(vista, (x2, y2), (x2 - l, y2), color, thickness, cv2.LINE_AA)
+    cv2.line(vista, (x2, y2), (x2, y2 - l), color, thickness, cv2.LINE_AA)
 
 
 def _dibujar_panel_registro(vista, info):
