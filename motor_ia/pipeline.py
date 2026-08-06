@@ -21,6 +21,7 @@ from motor_ia.antispoofing.verificador_3d import VerificadorAntiSpoofing
 from motor_ia.reconocimiento.embedding_generator import ReconocedorFacial
 from motor_ia.visualizacion import dibujar_preview, mostrar_preview
 from motor_ia.estado_registro import ANGULOS_REGISTRO
+from motor_ia.validacion_calidad import validar_calidad_rostro
 from backend.supabase_cliente import obtener_cliente
 from backend.snapshot_uploader import subir_snapshot
 from config.settings import (
@@ -354,13 +355,32 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                             # Verificar captura
                             tiempo_estable = ahora - _reg_tiempo_inicio if _reg_dir_actual else 0
                             if angulo_ok and tiempo_estable >= TIEMPO_ESTABILIZACION and modo_registro.puede_capturar():
+                                # === VALIDACIÓN DE CALIDAD ===
+                                calidad_ok, motivo_calidad = validar_calidad_rostro(imagen_rgb, bbox)
+                                if not calidad_ok:
+                                    # Calidad insuficiente: mostrar advertencia pero no capturar
+                                    track_dict = track.to_vis_dict()
+                                    track_dict["registro_info"] = {
+                                        "angulo_solicitado": angulo_solicitado,
+                                        "paso": modo_registro.paso,
+                                        "angulo_ok": True,
+                                        "estabilizado": True,
+                                        "tiempo_estable": tiempo_estable,
+                                        "captura_reciente": False,
+                                        "angulos_capturados": modo_registro.angulos_capturados,
+                                        "nombre": modo_registro.nombre,
+                                        "calidad_error": motivo_calidad,
+                                    }
+                                    tracks_frame.append(track_dict)
+                                    continue
+
                                 embedding = reconocedor.generar_embedding(imagen_rgb, bbox)
                                 if embedding is not None:
                                     modo_registro.registrar_captura(embedding, angulo_solicitado)
                                     _reg_captura_flash = ahora
                                     _reg_dir_actual = None
                                     _reg_tiempo_inicio = 0
-                                    print(f"    Registro: embedding {modo_registro.paso}/5 capturado (ángulo: {angulo_solicitado})")
+                                    print(f"    Registro: embedding {modo_registro.paso}/5 capturado (ángulo: {angulo_solicitado}) | {motivo_calidad}")
 
                             captura_reciente = (ahora - _reg_captura_flash) < 0.8
                             track_dict = track.to_vis_dict()

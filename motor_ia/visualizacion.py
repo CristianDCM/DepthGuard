@@ -184,6 +184,12 @@ def _dibujar_panel_registro(vista, info):
     cv2.putText(vista, texto_inst, (10, 130),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, color_inst, 2)
 
+    # Mostrar error de calidad si existe
+    calidad_error = info.get("calidad_error")
+    if calidad_error:
+        cv2.putText(vista, calidad_error, (10, 130),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+
 
 def mostrar_preview(vista):
     """Muestra el frame en ventana y retorna True si se presiona 'q'."""
