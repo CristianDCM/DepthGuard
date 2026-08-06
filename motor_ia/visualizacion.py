@@ -42,10 +42,7 @@ def dibujar_preview(frame, tracks, modo_registro_activo, registro_info=None):
     for track in tracks:
         _dibujar_persona(vista, track, modo_registro_activo and registro_info is not None)
 
-    # Título
-    cv2.putText(vista, "DEPTHGUARD - Preview", (10, 25),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-
+    # (Título de preview removido para mantener estética limpia)
     # Panel de registro (solo si está activo)
     if modo_registro_activo and registro_info:
         _dibujar_panel_registro(vista, registro_info)
