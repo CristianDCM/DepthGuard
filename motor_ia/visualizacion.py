@@ -135,7 +135,7 @@ def _dibujar_panel_registro(vista, info):
 
     # Fondo semitransparente para el panel
     overlay = vista.copy()
-    panel_h = 110
+    panel_h = 135
     cv2.rectangle(overlay, (0, 30), (w, 30 + panel_h), (0, 0, 0), -1)
     cv2.addWeighted(overlay, 0.7, vista, 0.3, 0, vista)
 
@@ -184,11 +184,11 @@ def _dibujar_panel_registro(vista, info):
     cv2.putText(vista, texto_inst, (10, 130),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, color_inst, 2)
 
-    # Mostrar error de calidad si existe
+    # Mostrar error de calidad si existe (debajo de la instrucción)
     calidad_error = info.get("calidad_error")
     if calidad_error:
-        cv2.putText(vista, calidad_error, (10, 130),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 2)
+        cv2.putText(vista, calidad_error, (10, 155),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 2)
 
 
 def mostrar_preview(vista):
