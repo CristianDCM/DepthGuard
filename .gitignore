@@ -20,3 +20,7 @@ backend/capturas/
 
 # Docker volumes (datos persistentes)
 data/
+
+# Logs de los scripts de arranque
+install_log.txt
+runtime_log.txt
