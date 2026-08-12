@@ -521,10 +521,10 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                 reconocedor.recargar_cache(usuarios)
                 modo_registro.recargar_cache = False
                 t_cache_refresh = ahora
-                # Resetear tracks para re-evaluar
+                # Forzar re-reconocimiento sin destruir la sesión
+                # (evita generar eventos duplicados para personas que siguen presentes)
                 for t in tracks_activos:
-                    t.sesion_tipo = None
-                    t.sesion_sujeto = None
+                    t.t_embedding = 0  # Forzar re-evaluación inmediata
                     t.nombre = None
                     t.confianza = 0
                 print(f"    Caché recargada (registro): {len(usuarios)} usuarios")
@@ -536,8 +536,7 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                 reconocedor.recargar_cache(usuarios)
                 t_cache_refresh = ahora
                 for t in tracks_activos:
-                    t.sesion_tipo = None
-                    t.sesion_sujeto = None
+                    t.t_embedding = 0
                     t.nombre = None
                     t.confianza = 0
                 print(f"    Caché recargada (invalidación externa): {len(usuarios)} usuarios")
@@ -548,8 +547,7 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                 usuarios = _cargar_usuarios_supabase()
                 reconocedor.recargar_cache(usuarios)
                 for t in tracks_activos:
-                    t.sesion_tipo = None
-                    t.sesion_sujeto = None
+                    t.t_embedding = 0
                     t.nombre = None
                     t.confianza = 0
 
