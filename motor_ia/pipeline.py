@@ -289,6 +289,11 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                     msg_sin_rostro = "Coloque su rostro frente a la camara"
                 cv2.putText(color, msg_sin_rostro, (10, 55),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.5, (100, 100, 100), 1)
+
+                # WebRTC: seguir transmitiendo aunque no haya rostros
+                if frame_provider is not None:
+                    frame_provider.update_frame(color.copy())
+
                 if mostrar_preview(color):
                     break
                 _dormir_hasta_fps(frame_start, MIN_FRAME_TIME * 2)
