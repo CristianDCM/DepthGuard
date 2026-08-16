@@ -15,6 +15,7 @@ import time
 import datetime
 
 from backend.supabase_cliente import obtener_cliente
+from config.settings import TOLERANCIA_FACIAL, UMBRAL_VARIANZA, COOLDOWN_EVENTO
 
 
 # Definición de las 2 cámaras del sistema (arquitectura multicámara)
@@ -76,6 +77,9 @@ def iniciar_heartbeat(intervalo: int = 30, camera_id: str = "entrada_principal",
                 "camara_activa": True,
                 "modo_camara": modo_camara,
                 "camaras": camaras,
+                "tolerancia_facial": TOLERANCIA_FACIAL,
+                "umbral_varianza": UMBRAL_VARIANZA,
+                "cooldown_eventos": COOLDOWN_EVENTO,
                 "updated_at": ahora,
             }).eq("id", 1).execute()
         except Exception as e:
