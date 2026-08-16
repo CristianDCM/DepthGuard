@@ -52,6 +52,7 @@ MIN_PIXELES_VALIDOS = float(_env.get("MIN_PIXELES_VALIDOS", "0.30"))
 TOLERANCIA_FACIAL = float(_env.get("TOLERANCIA_FACIAL", "0.50"))
 COOLDOWN_EMBEDDING = float(_env.get("COOLDOWN_EMBEDDING", "2.0"))
 COOLDOWN_ANTISPOOFING = float(_env.get("COOLDOWN_ANTISPOOFING", "0.3"))
+COOLDOWN_EVENTO = int(_env.get("COOLDOWN_EVENTO", "5"))
 
 # === ADMIN (seed inicial) ===
 ADMIN_USUARIO = _env.get("ADMIN_USUARIO", "admin")
