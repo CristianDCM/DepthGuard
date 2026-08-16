@@ -12,13 +12,13 @@ _INSTRUCCIONES_ANGULO = {
     "abajo":     "Mire hacia ABAJO",
 }
 
-# Flechas Unicode para indicar dirección
+# Indicadores de dirección (limpios, sin flechas amateur)
 _FLECHAS_ANGULO = {
-    "frontal":   "O",
-    "izquierda": "<<",
-    "derecha":   ">>",
-    "arriba":    "^^",
-    "abajo":     "vv",
+    "frontal":   "",
+    "izquierda": "",
+    "derecha":   "",
+    "arriba":    "",
+    "abajo":     "",
 }
 
 
@@ -192,63 +192,73 @@ def _dibujar_panel_registro(vista, info):
     angulo_ok = info.get("angulo_ok", False)
     nombre = info.get("nombre", "")
     captura_reciente = info.get("captura_reciente", False)
-
-    # Fondo semitransparente para el panel
+    # ==========================================
+    # HUD BIOMÉTRICO PROFESIONAL (OPENCV)
+    # ==========================================
+    
+    h_frame, w = vista.shape[:2]
+    
+    # 1. Panel superior con gradiente oscuro
     overlay = vista.copy()
-    panel_h = 135
-    cv2.rectangle(overlay, (0, 30), (w, 30 + panel_h), (0, 0, 0), -1)
-    cv2.addWeighted(overlay, 0.7, vista, 0.3, 0, vista)
+    panel_h = 90
+    cv2.rectangle(overlay, (0, 0), (w, panel_h), (12, 12, 14), -1)
+    # Línea separadora fina y sutil
+    cv2.line(overlay, (0, panel_h), (w, panel_h), (40, 40, 40), 1, cv2.LINE_AA)
+    cv2.addWeighted(overlay, 0.88, vista, 0.12, 0, vista)
 
-    # Nombre del usuario
-    cv2.putText(vista, f"Registrando: {nombre}", (10, 55),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (200, 200, 200), 1)
-
-    # Progreso: circulos para cada ángulo
+    # 2. Barra de Progreso Segmentada
     angulos_nombres = ["frontal", "izquierda", "derecha", "arriba", "abajo"]
-    angulos_labels = ["F", "I", "D", "Ar", "Ab"]
     angulos_cap = info.get("angulos_capturados", [])
-
-    base_x = 10
-    for i, (ang_n, ang_l) in enumerate(zip(angulos_nombres, angulos_labels)):
-        cx = base_x + i * 55 + 20
-        cy = 85
-
+    
+    margen = 20
+    ancho_total = w - (margen * 2)
+    gap = 3
+    ancho_seg = (ancho_total - gap * 4) // 5
+    bar_y = 12
+    bar_h = 4
+    
+    for i, ang_n in enumerate(angulos_nombres):
+        x1 = margen + i * (ancho_seg + gap)
+        x2 = x1 + ancho_seg
+        
         if ang_n in angulos_cap:
-            cv2.circle(vista, (cx, cy), 16, (0, 200, 0), -1)
-            cv2.circle(vista, (cx, cy), 16, (0, 255, 0), 2)
+            cv2.rectangle(vista, (x1, bar_y), (x2, bar_y + bar_h), (0, 230, 0), -1)
         elif ang_n == angulo:
-            cv2.circle(vista, (cx, cy), 16, (0, 180, 255), -1)
-            cv2.circle(vista, (cx, cy), 16, (0, 255, 255), 2)
+            cv2.rectangle(vista, (x1, bar_y), (x2, bar_y + bar_h), (0, 200, 255), -1)
         else:
-            cv2.circle(vista, (cx, cy), 16, (60, 60, 60), -1)
-            cv2.circle(vista, (cx, cy), 16, (100, 100, 100), 2)
+            cv2.rectangle(vista, (x1, bar_y), (x2, bar_y + bar_h), (50, 50, 50), -1)
 
-        tam_l, _ = cv2.getTextSize(ang_l, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
-        cv2.putText(vista, ang_l, (cx - tam_l[0] // 2, cy + 5),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+    # 3. Nombre del usuario
+    cv2.putText(vista, f"REGISTRO  |  {nombre.upper()}", (margen, 40),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.42, (160, 160, 160), 1, cv2.LINE_AA)
 
-    # Instrucción principal grande
-    instruccion = _INSTRUCCIONES_ANGULO.get(angulo, "")
-    flecha = _FLECHAS_ANGULO.get(angulo, "")
+    # 4. Instrucción principal
+    instruccion = _INSTRUCCIONES_ANGULO.get(angulo, "").upper()
 
     if captura_reciente:
-        texto_inst = f"CAPTURADO! Paso {paso}/5"
+        texto_inst = f"CAPTURA EXITOSA  [{paso}/5]"
         color_inst = (0, 255, 0)
     elif angulo_ok:
-        texto_inst = f"{instruccion} - Mantenga..."
+        texto_inst = "MANTENGA LA POSICION..."
         color_inst = (0, 255, 255)
     else:
-        texto_inst = f"{flecha}  {instruccion}  {flecha}   (Paso {paso + 1}/5)"
-        color_inst = (0, 165, 255)
+        texto_inst = f"PASO {paso + 1}/5:  {instruccion}"
+        color_inst = (0, 180, 255)
 
-    cv2.putText(vista, texto_inst, (10, 130),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.6, color_inst, 2)
+    cv2.putText(vista, texto_inst, (margen, 72),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.62, color_inst, 2, cv2.LINE_AA)
 
-    # Mostrar error de calidad si existe (debajo de la instrucción)
+    # 5. Alerta de calidad (esquina inferior izquierda)
     calidad_error = info.get("calidad_error")
     if calidad_error:
-        cv2.putText(vista, calidad_error, (10, 155),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 2)
+        texto_err = calidad_error.upper()
+        tam_e, _ = cv2.getTextSize(texto_err, cv2.FONT_HERSHEY_SIMPLEX, 0.4, 1)
+        err_y = h_frame - 15
+        # Fondo rojo oscuro
+        cv2.rectangle(vista, (margen - 5, err_y - tam_e[1] - 8), 
+                      (margen + tam_e[0] + 10, err_y + 5), (0, 0, 120), -1)
+        cv2.putText(vista, texto_err, (margen, err_y),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 255), 1, cv2.LINE_AA)
 
 
 def mostrar_preview(vista):

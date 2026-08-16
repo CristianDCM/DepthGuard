@@ -87,13 +87,36 @@ def _ejecutar_registro(supabase, comando, modo_registro):
     ultimo_paso_reportado = -1
 
     while time.time() - t_inicio < timeout:
-        # Verificar si se canceló externamente
+        # Verificar si se canceló internamente (flag directo)
         if not modo_registro.activo and not modo_registro.completado:
             _actualizar_comando(supabase, cmd_id, "cancelado", resultado={
                 "motivo": "Registro cancelado"
             })
             print(f"[CommandListener]  Registro cancelado: {nombre}")
             return
+
+        # Verificar si la web envió un comando CANCELAR_REGISTRO
+        try:
+            cancel_resp = supabase.table("comandos_edge") \
+                .select("id") \
+                .eq("tipo", "CANCELAR_REGISTRO") \
+                .eq("usuario_id", usuario_id) \
+                .eq("estado", "pendiente") \
+                .limit(1) \
+                .execute()
+            if cancel_resp.data:
+                cancel_cmd_id = cancel_resp.data[0]["id"]
+                modo_registro.activo = False
+                _actualizar_comando(supabase, cancel_cmd_id, "completado", resultado={
+                    "motivo": "Cancelación ejecutada"
+                })
+                _actualizar_comando(supabase, cmd_id, "cancelado", resultado={
+                    "motivo": "Cancelado desde la web"
+                })
+                print(f"[CommandListener]  Registro cancelado desde la web: {nombre}")
+                return
+        except Exception:
+            pass  # No romper el registro si falla la verificación
 
         # Actualizar progreso si cambió
         paso_actual = modo_registro.paso
