@@ -88,7 +88,14 @@ PERMITIR_SERVICE_KEY = _env.get("PERMITIR_SERVICE_KEY", "true").lower() == "true
 # permiso puede borrar el rastro de auditoria, asi que con clave restringida
 # esto debe ser false y la retencion la hace pg_cron en la base de datos
 # (ver supabase/rls_edge.sql).
-CLEANUP_EN_EDGE = _env.get("CLEANUP_EN_EDGE", "true").lower() == "true"
+#
+# El defecto es false porque con la clave restringida el edge NO PUEDE hacer
+# la limpieza: no tiene ni permiso de LECTURA sobre historial, asi que la
+# consulta que busca los registros caducados falla con 42501 antes de llegar
+# a borrar nada. Dejarlo en true solo producia un error cada 24 horas.
+# Ponerlo en true tiene sentido unicamente con SUPABASE_SERVICE_KEY, que
+# salta toda la RLS y no deberia estar en el .env de un dispositivo.
+CLEANUP_EN_EDGE = _env.get("CLEANUP_EN_EDGE", "false").lower() == "true"
 
 # === ANTI-SPOOFING ===
 UMBRAL_VARIANZA = float(_env.get("UMBRAL_VARIANZA", "0.7"))

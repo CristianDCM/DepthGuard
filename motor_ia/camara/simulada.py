@@ -35,18 +35,38 @@ import cv2
 from config.settings import CAMARA_ANCHO, CAMARA_ALTO, CAMARA_FPS
 
 
-# MJPG no es una optimizacion opcional: es la diferencia entre que la camara
-# entregue 1280x960 a 30 FPS o a 8.
+# Se pide MJPG, pero NO porque sea mejor: porque es el unico formato que
+# cabe por un bus estrecho.
 #
-# Una webcam UVC ofrece dos formatos. YUYV va sin comprimir: 1280x960 son
-# 3.7 MB por frame, y a 30 FPS eso son ~110 MB/s, muy por encima de lo que
-# da un USB 2.0 (~35 MB/s reales). El driver no falla ni avisa: simplemente
-# negocia menos FPS hasta que cabe. MJPG va comprimido en la propia camara
-# (~250 KB por frame), asi que entra de sobra.
+# Una webcam UVC ofrece dos familias de formato. Sin comprimir (YUY2/YUYV,
+# 2 bytes por pixel) 1280x960 son 2,4 MB por frame: a 30 FPS son ~74 MB/s,
+# mas de lo que da un USB 2.0 (~35 MB/s reales). El driver no falla ni
+# avisa, simplemente negocia menos FPS hasta que cabe. MJPG va comprimido
+# en la propia camara (~0,9 MB por frame, ~28 MB/s), asi que entra.
 #
-# Y el orden importa: hay que fijar el FOURCC ANTES que ancho y alto. Al
-# reves, muchos backends ya han negociado el modo y descartan el cambio.
+# Pero si el bus da de si —una camara interna de portatil, o USB 3.0— el
+# formato sin comprimir es PREFERIBLE, y por un margen grande. Medido a
+# 1280x960: convertir YUY2 a BGR cuesta 0,21 ms, mientras que decodificar
+# el JPEG de MJPG cuesta entre 5 y 14 ms. Comprimir en la camara para
+# descomprimir en la CPU solo tiene sentido cuando el cable es el cuello
+# de botella.
+#
+# De ahi que `diagnosticar` NO avise por recibir YUY2: avisa por FPS bajos,
+# y solo entonces senala el formato como causa probable. Un formato sin
+# comprimir que mantiene el ritmo pedido no es un problema, es el mejor caso.
+#
+# El orden de las llamadas importa: hay que fijar el FOURCC ANTES que ancho
+# y alto. Al reves, muchos backends ya han negociado el modo y lo descartan.
 FOURCC_MJPG = cv2.VideoWriter_fourcc(*"MJPG")
+
+# Bytes por pixel de los formatos sin comprimir habituales en webcams UVC.
+# Sirve para calcular el ancho de banda que pide el bus cuando hay que
+# explicar por que se cayeron los FPS.
+_BYTES_POR_PIXEL = {"YUY2": 2, "YUYV": 2, "UYVY": 2, "NV12": 1.5, "I420": 1.5}
+
+# Ancho de banda util aproximado de un USB 2.0 en MB/s. No son los 60 MB/s
+# teoricos: el protocolo y el resto de dispositivos del bus se llevan lo suyo.
+_USB2_MB_S = 35
 
 # Frames que se descartan antes de medir los FPS reales. Las primeras
 # lecturas tras abrir la camara no son representativas: el auto-exposure y
@@ -89,6 +109,12 @@ def diagnosticar(pedido, real, fourcc, fps_medido, fps_pedido=None):
     Se separa de `conectar` para poder probarla sin webcam: recibe numeros
     y devuelve texto.
 
+    El criterio es el ritmo, no el formato. Recibir YUY2 en vez de MJPG no
+    es un defecto mientras la camara mantenga los FPS —de hecho ahorra el
+    coste de decodificar el JPEG—, asi que avisar de ello seria enviar al
+    usuario a perseguir un problema que no tiene. Solo cuando los FPS caen
+    se senala el formato, que entonces si es la causa probable.
+
     Args:
         pedido: (ancho, alto) solicitado.
         real: (ancho, alto) del primer frame leido de verdad. Se mide del
@@ -99,23 +125,26 @@ def diagnosticar(pedido, real, fourcc, fps_medido, fps_pedido=None):
         fps_pedido: FPS solicitados (CAMARA_FPS por defecto).
 
     Returns:
-        Lista de lineas de aviso. Vacia si todo se concedio.
+        Lista de lineas de aviso. Vacia si no hay nada que corregir.
     """
     if fps_pedido is None:
         fps_pedido = CAMARA_FPS
 
     avisos = []
     formato = describir_fourcc(fourcc)
+    ancho_real, alto_real = real
 
+    # --- Resolucion ---
     if tuple(real) != tuple(pedido):
         avisos.append(
             f"La camara no concedio {pedido[0]}x{pedido[1]}: entrega "
-            f"{real[0]}x{real[1]}."
+            f"{ancho_real}x{alto_real}."
         )
-        if real[0] <= 640:
-            # Es el caso que deja el sistema como estaba antes: el pipeline
-            # solo reduce el frame si supera ANCHO_DETECCION, asi que a 640
-            # el recorte del embedding vuelve a ser el pequeno.
+        if ancho_real <= 640:
+            # Caer a 640 no es "un poco peor": devuelve el sistema al
+            # comportamiento anterior, porque el pipeline solo reduce el
+            # frame si supera ANCHO_DETECCION. El embedding volveria a
+            # salir de la imagen pequena.
             avisos.append(
                 "   A 640 de ancho el embedding vuelve a salir del frame "
                 "reducido, que es justo lo que queriamos evitar."
@@ -125,24 +154,30 @@ def diagnosticar(pedido, real, fourcc, fps_medido, fps_pedido=None):
             "(p.ej. 1280x720)."
         )
 
-    if formato != "MJPG":
-        avisos.append(
-            f"La camara no esta en MJPG sino en {formato}."
-        )
-        avisos.append(
-            "   Sin compresion en camara, esta resolucion no cabe por USB 2.0 "
-            "y el driver baja los FPS en silencio."
-        )
-
+    # --- Ritmo, y solo si cae, el formato como causa ---
     if fps_medido is not None and fps_medido < fps_pedido * _FRACCION_FPS_ACEPTABLE:
         avisos.append(
             f"Ritmo real {fps_medido:.1f} FPS, muy por debajo de los "
             f"{fps_pedido} pedidos."
         )
-        avisos.append(
-            "   Suele significar que la camara negocio un formato sin "
-            "comprimir. Baja CAMARA_ANCHO/CAMARA_ALTO o revisa el cable/puerto."
-        )
+
+        bytes_px = _BYTES_POR_PIXEL.get(formato)
+        if bytes_px:
+            mb_s = ancho_real * alto_real * bytes_px * fps_pedido / 1e6
+            avisos.append(
+                f"   La camara entrega {formato}, sin comprimir: a "
+                f"{ancho_real}x{alto_real} son ~{mb_s:.0f} MB/s y un USB 2.0 "
+                f"da ~{_USB2_MB_S}."
+            )
+            avisos.append(
+                "   Baja CAMARA_ANCHO/CAMARA_ALTO, o pasa la camara a un "
+                "puerto USB 3.0."
+            )
+        else:
+            avisos.append(
+                "   Revisa el cable y el puerto, o baja "
+                "CAMARA_ANCHO/CAMARA_ALTO."
+            )
 
     return avisos
 

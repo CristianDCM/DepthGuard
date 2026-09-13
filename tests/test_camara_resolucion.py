@@ -68,22 +68,55 @@ class TestDiagnosticar(unittest.TestCase):
         )
         self.assertEqual(avisos, [])
 
-    def test_detecta_formato_sin_comprimir(self):
+    def test_formato_sin_comprimir_que_mantiene_el_ritmo_no_avisa(self):
+        # El caso real de la camara del portatil: entrega YUY2 a 1280x960 y
+        # 30 FPS. La primera version avisaba de todas formas, y el aviso
+        # decia "el driver baja los FPS en silencio" en la linea siguiente a
+        # haber informado de 30.0 FPS: se contradecia a si mismo y mandaba al
+        # usuario a arreglar algo que no estaba roto.
+        #
+        # De hecho es el mejor caso: convertir YUY2 a BGR cuesta 0,21 ms y
+        # decodificar el JPEG de MJPG entre 5 y 14 ms (medido a 1280x960).
+        # Comprimir en la camara para descomprimir en la CPU solo compensa
+        # cuando el cable no da mas.
         avisos = diagnosticar(
             pedido=(1280, 960), real=(1280, 960),
-            fourcc=cv2.VideoWriter_fourcc(*"YUYV"),
-            fps_medido=29.0, fps_pedido=30,
+            fourcc=cv2.VideoWriter_fourcc(*"YUY2"),
+            fps_medido=30.0, fps_pedido=30,
         )
-        self.assertTrue(any("YUYV" in a for a in avisos))
-        self.assertTrue(any("USB 2.0" in a for a in avisos))
+        self.assertEqual(avisos, [])
 
     def test_detecta_desplome_de_fps(self):
-        # El sintoma clasico de negociar YUYV a alta resolucion.
         avisos = diagnosticar(
             pedido=(1280, 960), real=(1280, 960),
             fourcc=FOURCC_MJPG, fps_medido=8.0, fps_pedido=30,
         )
         self.assertTrue(any("8.0 FPS" in a for a in avisos))
+
+    def test_si_los_fps_caen_senala_el_formato_como_causa(self):
+        # Aqui si: sin comprimir Y sin ritmo es el sintoma de un bus saturado,
+        # y el aviso debe dar el numero para que se entienda por que.
+        avisos = diagnosticar(
+            pedido=(1280, 960), real=(1280, 960),
+            fourcc=cv2.VideoWriter_fourcc(*"YUY2"),
+            fps_medido=9.0, fps_pedido=30,
+        )
+        texto = " ".join(avisos)
+        self.assertIn("YUY2", texto)
+        self.assertIn("USB 3.0", texto)
+        # 1280*960*2 bytes * 30 fps = 73,7 MB/s
+        self.assertIn("74 MB/s", texto)
+
+    def test_fps_bajos_con_mjpg_no_culpan_al_formato(self):
+        # Con MJPG el cuello de botella no es el ancho de banda, asi que
+        # sugerir un puerto USB 3.0 seria un consejo equivocado.
+        avisos = diagnosticar(
+            pedido=(1280, 960), real=(1280, 960),
+            fourcc=FOURCC_MJPG, fps_medido=7.0, fps_pedido=30,
+        )
+        texto = " ".join(avisos)
+        self.assertNotIn("USB", texto)
+        self.assertIn("cable", texto)
 
     def test_detecta_resolucion_no_concedida(self):
         avisos = diagnosticar(
