@@ -39,6 +39,7 @@ from config.settings import (
     MAX_EMBEDDINGS_POR_FRAME,
     JITTERS_REGISTRO,
     REQUERIR_CAMARA_3D,
+    MOSTRAR_PREVIEW, DIAGNOSTICO_RENDIMIENTO,
 )
 
 # FPS objetivo para el pipeline (evita consumir 100% CPU)
@@ -101,6 +102,61 @@ def _preparar_crop(imagen_rgb, bbox, color_full, escala_full, rgb_full,
 # Decision por rostro para el frame actual. `embedding` es None cuando no se
 # pudo generar; `motivo_gate` no vacio significa que el rostro no paso los
 # filtros de pose o calidad y no se le saco embedding.
+class Cronometro:
+    """
+    Reparte el tiempo de cada frame por etapas.
+
+    Existe porque "va lento" no es un diagnostico. El bucle hace media docena de
+    cosas por frame —capturar, detectar, reconocer, dibujar, transmitir— y sin
+    separarlas no se sabe cual se lleva el tiempo. Con el reparto delante, la
+    diferencia entre "la camara entrega despacio" y "la ventana de preview cuesta
+    15 ms" se ve en una linea.
+
+    El coste de medir es despreciable: perf_counter ronda los 50 ns y se llama
+    unas ocho veces por frame.
+    """
+
+    ETAPAS = ("captura", "preparacion", "deteccion", "embeddings",
+              "preview", "webrtc", "espera")
+
+    def __init__(self):
+        self._acumulado = {e: 0.0 for e in self.ETAPAS}
+        self._frames = 0
+        self._t0 = time.time()
+        self._inicio = None
+
+    def empezar(self):
+        self._inicio = time.perf_counter()
+
+    def marcar(self, etapa):
+        """Cierra la etapa actual y empieza la siguiente."""
+        ahora = time.perf_counter()
+        if self._inicio is not None and etapa in self._acumulado:
+            self._acumulado[etapa] += ahora - self._inicio
+        self._inicio = ahora
+
+    def fin_de_frame(self):
+        self._frames += 1
+
+    def toca_informar(self, ahora, cada=3.0):
+        return self._frames > 0 and (ahora - self._t0) >= cada
+
+    def informe(self, ahora):
+        """Devuelve una linea con FPS y el reparto en ms, y reinicia."""
+        transcurrido = max(ahora - self._t0, 1e-9)
+        fps = self._frames / transcurrido
+        partes = " ".join(
+            f"{e}={self._acumulado[e] / self._frames * 1000:.1f}"
+            for e in self.ETAPAS
+        )
+        linea = f"[Rendimiento] {fps:.1f} FPS | ms/frame: {partes}"
+
+        self._acumulado = {e: 0.0 for e in self.ETAPAS}
+        self._frames = 0
+        self._t0 = ahora
+        return linea
+
+
 PlanEmbedding = namedtuple("PlanEmbedding", ["embedding", "motivo_gate"])
 
 
@@ -297,9 +353,8 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
     _reg_tiempo_inicio = 0
     _reg_captura_flash = 0
 
-    # FPS counter para debug
-    _fps_count = 0
-    _fps_timer = time.time()
+    # Reparto del tiempo de cada frame por etapas (ver Cronometro)
+    crono = Cronometro()
 
     print(" Pipeline IA activo (multi-rostro, máx 5)")
     print("    Ventana de preview abierta (presiona 'q' para cerrar)")
@@ -307,11 +362,15 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
     try:
         while True:
             frame_start = time.time()
+            crono.empezar()
 
             color, profundidad = camara.obtener_frames()
+            crono.marcar("captura")
 
             if color is None:
                 time.sleep(0.05)
+                crono.marcar("espera")
+                crono.fin_de_frame()
                 continue
 
             ahora = time.time()
@@ -332,6 +391,7 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                                              interpolation=cv2.INTER_NEAREST)
 
             imagen_rgb = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
+            crono.marcar("preparacion")
 
             # Conversión del frame full-res: cara (a resolución nativa), así
             # que se hace una sola vez por frame y solo si algún rostro
@@ -340,6 +400,7 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
 
             # === DETECCIÓN (cada frame) — retorna lista de rostros ===
             detecciones = detector.detectar(imagen_rgb)
+            crono.marcar("deteccion")
 
             # Limpiar tracks expirados
             tracks_activos = [t for t in tracks_activos if t.esta_activo(ahora)]
@@ -360,10 +421,18 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                 # WebRTC: seguir transmitiendo aunque no haya rostros
                 if frame_provider is not None:
                     frame_provider.update_frame(color.copy())
+                crono.marcar("webrtc")
 
-                if mostrar_preview(color):
-                    break
+                if MOSTRAR_PREVIEW:
+                    if mostrar_preview(color):
+                        break
+                crono.marcar("preview")
+
                 _dormir_hasta_fps(frame_start, MIN_FRAME_TIME * 2)
+                crono.marcar("espera")
+                crono.fin_de_frame()
+                if DIAGNOSTICO_RENDIMIENTO and crono.toca_informar(time.time()):
+                    print(f"    {crono.informe(time.time())}")
                 continue
 
             # === ASOCIAR detecciones con tracks existentes ===
@@ -383,6 +452,7 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                     matched, ahora, reconocedor, imagen_rgb, color_full,
                     escala_full, rgb_full, MAX_EMBEDDINGS_POR_FRAME
                 )
+            crono.marcar("embeddings")
 
             tracks_frame = []  # Tracks para este frame
 
@@ -695,12 +765,22 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                 color, tracks_frame, modo_registro.activo,
                 registro_info=registro_info_global
             )
-            if mostrar_preview(vista):
-                break
+            crono.marcar("preparacion")
+
+            # La ventana local es depuracion, no la vista de produccion (esa es
+            # el stream WebRTC), pero se dibuja DENTRO de este bucle: su coste y
+            # cualquier cosa que el sistema operativo haga con ella salen del
+            # presupuesto de tiempo del frame. Con MOSTRAR_PREVIEW=false deja de
+            # poder afectar al sistema.
+            if MOSTRAR_PREVIEW:
+                if mostrar_preview(vista):
+                    break
+            crono.marcar("preview")
 
             # === WEBRTC: actualizar FrameProvider ===
             if frame_provider is not None:
                 frame_provider.update_frame(vista.copy())
+            crono.marcar("webrtc")
 
             # === SNAPSHOT para preview en vivo (cada 2s) ===
             if ahora - t_snapshot >= SNAPSHOT_INTERVAL:
@@ -767,15 +847,13 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                             t.nombre = None
                             t.confianza = 0
 
-            # FPS debug (cada 3 segundos)
-            _fps_count += 1
-            if ahora - _fps_timer >= 3.0:
-                fps = _fps_count / (ahora - _fps_timer)
-                _fps_count = 0
-                _fps_timer = ahora
-
             # Limitar FPS para no saturar CPU
             _dormir_hasta_fps(frame_start, MIN_FRAME_TIME)
+            crono.marcar("espera")
+            crono.fin_de_frame()
+
+            if DIAGNOSTICO_RENDIMIENTO and crono.toca_informar(time.time()):
+                print(f"    {crono.informe(time.time())}")
 
     except Exception as e:
         print(f" Error pipeline: {e}")
