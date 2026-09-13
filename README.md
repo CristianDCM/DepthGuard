@@ -130,6 +130,7 @@ DepthGuard/
 │   ├── supabase_cliente.py    # Cliente Supabase (singleton)
 │   ├── claves.py              # Política de selección de clave
 │   ├── privilegios.py         # Inventario de privilegios del edge
+│   ├── autorizacion_registro.py # Autoriza los comandos de enrolamiento
 │   ├── supabase_sync.py       # Store-and-Forward → historial
 │   └── heartbeat.py           # Heartbeat cada 30s
 ├── scripts/

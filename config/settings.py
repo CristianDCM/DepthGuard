@@ -170,6 +170,24 @@ VOTOS_REQUERIDOS = int(_env.get("VOTOS_REQUERIDOS", "3"))
 JITTERS_REGISTRO = int(_env.get("JITTERS_REGISTRO", "3"))
 JITTERS_RECONOCIMIENTO = int(_env.get("JITTERS_RECONOCIMIENTO", "1"))
 
+# === AUTORIZACION DE REGISTRO BIOMETRICO (hallazgo C4) ===
+#
+# Sobrescribir la biometria de alguien que YA la tiene es el vector de
+# suplantacion: quien pueda escribir en `comandos_edge` apuntaria al
+# usuario_id de un administrador y enrolaria su propia cara. Por eso el
+# re-enrolamiento exige autorizacion explicita.
+#
+# Sin firma HMAC, esta config LOCAL del dispositivo es lo unico que el
+# atacante no controla (el flag del comando si lo controla). Dejala en false
+# y ponla en true solo el rato que dure un re-enrolamiento legitimo.
+PERMITIR_REENROLAMIENTO = _env.get("PERMITIR_REENROLAMIENTO", "false").lower() == "true"
+
+# Secreto compartido para verificar comandos firmados. Vacio = sin firma.
+# La firma debe generarse EN SERVIDOR (Edge Function de Supabase o backend de
+# administracion), nunca en el navegador: un secreto en una SPA no es secreto.
+# Ver backend/autorizacion_registro.py para el formato del mensaje firmado.
+REGISTRO_HMAC_SECRET = _env.get("REGISTRO_HMAC_SECRET", "")
+
 # === ADMIN (seed inicial) ===
 ADMIN_USUARIO = _env.get("ADMIN_USUARIO", "admin")
 ADMIN_PASSWORD = _env.get("ADMIN_PASSWORD", "admin123")

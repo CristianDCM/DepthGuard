@@ -33,6 +33,7 @@ Set `MODO_CAMARA` in `.env`:
 | `backend/supabase_cliente.py` | Supabase client singleton (restricted device key) |
 | `backend/claves.py` | Key-selection policy: restricted key wins, service_role fails closed |
 | `backend/privilegios.py` | Authoritative inventory of every privileged op the edge performs |
+| `backend/autorizacion_registro.py` | Authorizes enrolment commands before the edge writes biometrics |
 | `supabase/rls_edge.sql` | Restricted role + RLS policies implementing that inventory |
 | `backend/supabase_sync.py` | Store-and-forward: queue → Supabase historial |
 | `backend/heartbeat.py` | Updates estado_sistema.ultimo_heartbeat every 30s |
@@ -43,6 +44,40 @@ Set `MODO_CAMARA` in `.env`:
 - Requires Intel RealSense SDK if `MODO_CAMARA=realsense`
 - Requires `.env` file with `SUPABASE_URL` and `SUPABASE_SERVICE_KEY`
 - Supabase tables must be created beforehand (see DISEÑO_SISTEMA.md)
+
+## Enrolment authorization
+
+The edge used to enrol biometrics into whatever `usuario_id` a row in
+`comandos_edge` carried, with no validation. Anyone able to insert such a row
+made the edge **overwrite an administrator's face templates with their own** —
+direct impersonation, not privilege escalation.
+
+Every `INICIAR_REGISTRO` command is now authorized before anything is written:
+
+1. The target must **exist and be active** — the edge reads `usuarios` itself
+   rather than trusting the command.
+2. If the command states a `nombre`, it must **match the database**. This stops
+   an attacker disguising "overwrite the admin" as "enrol a new employee": they
+   must use the admin's real name, which then shows in the HUD and the audit
+   record. The DB name is always the authoritative one displayed.
+3. **Re-enrolment is blocked** — overwriting existing templates needs explicit
+   authorization the attacker cannot grant themselves.
+
+| Variable | What it does |
+|----------|--------------|
+| `PERMITIR_REENROLAMIENTO` | Local device config. Without a signature this is the **only** thing an attacker does not control (the command's own flag, they do). Keep it `false`; turn it on only for the duration of a legitimate re-enrolment |
+| `REGISTRO_HMAC_SECRET` | Shared secret for signed commands. Empty = no signature required. Sign **server-side** (a Supabase Edge Function or the admin backend), never in the browser |
+
+The signed message is `tipo|id|usuario_id|nombre|reenrolar` (HMAC-SHA256, hex).
+The command id is inside it, so a valid signature cannot be transplanted onto
+another row; the re-enrolment flag is inside it too, so it cannot be flipped
+after signing.
+
+**Scope, honestly:** this closes an attacker who can write to `comandos_edge`
+but not insert into `usuarios`. One who can do both can create an identity and
+enrol into it — that is cut off by the `usuarios` RLS, not here. And since the
+edge needs the HMAC secret to verify, a compromised *edge* can forge commands;
+the signature protects against a compromised *database*.
 
 ## Supabase keys / least privilege
 

@@ -146,6 +146,35 @@ create policy edge_actualiza_comandos on public.comandos_edge
 
 
 -- ---------------------------------------------------------------------------
+-- 3b. Quien puede CREAR comandos (lado base de datos del hallazgo C4)
+-- ---------------------------------------------------------------------------
+-- El edge ya no ejecuta comandos a ciegas: valida el objetivo contra la BD y
+-- bloquea sobrescribir biometria existente
+-- (backend/autorizacion_registro.py). Pero esa es la segunda linea. La
+-- primera es que solo un administrador autenticado pueda INSERTAR en
+-- `comandos_edge`.
+--
+-- Este fichero cubre el EDGE, asi que la politica de insercion depende de
+-- como autentique tu frontend y va aqui como plantilla, no como algo que
+-- puedas ejecutar tal cual. Ajusta la condicion a tu esquema de admins:
+--
+--   alter table public.comandos_edge enable row level security;
+--
+--   drop policy if exists solo_admin_crea_comandos on public.comandos_edge;
+--   create policy solo_admin_crea_comandos on public.comandos_edge
+--     for insert to authenticated
+--     with check (
+--       exists (
+--         select 1 from public.admin a
+--         where a.id = auth.uid()          -- ajusta a tu modelo de admins
+--       )
+--     );
+--
+-- COMPROBACION: con la anon key, y con una sesion de usuario no admin, un
+-- INSERT en comandos_edge debe FALLAR.
+
+
+-- ---------------------------------------------------------------------------
 -- 4. Storage
 -- ---------------------------------------------------------------------------
 -- El edge sube fotos de eventos y el preview en vivo al bucket "capturas".

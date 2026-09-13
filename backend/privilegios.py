@@ -34,19 +34,22 @@ TABLAS = [
     Privilegio(
         recurso="usuarios",
         operaciones=("select",),
-        usado_en="motor_ia/pipeline.py:_cargar_usuarios_supabase",
+        usado_en="motor_ia/pipeline.py:_cargar_usuarios_supabase, "
+                 "backend/command_listener.py:_cargar_usuario_objetivo",
         nota="Solo id, nombre, embeddings_json, num_angulos, activo; y solo "
-             "filas con activo = true.",
+             "filas con activo = true. El command listener lo lee ademas para "
+             "verificar contra la BD a quien va a enrolar un comando, en vez "
+             "de fiarse de lo que diga el comando.",
     ),
     Privilegio(
         recurso="usuarios",
         operaciones=("update",),
         usado_en="backend/command_listener.py:_ejecutar_registro",
         nota="Solo embeddings_json y num_angulos, al completar un registro. "
-             "OJO: este es el privilegio del hallazgo C4 — hoy el edge "
-             "escribe biometria en el usuario_id que venga en el comando sin "
-             "validarlo. La RLS lo acota a esas dos columnas, pero la "
-             "autorizacion del comando sigue pendiente (C4).",
+             "El comando se autoriza antes de llegar aqui "
+             "(backend/autorizacion_registro.py): el usuario debe existir y "
+             "estar activo, el nombre debe cuadrar con la BD, y sobrescribir "
+             "biometria existente exige autorizacion explicita.",
     ),
     Privilegio(
         recurso="historial",
