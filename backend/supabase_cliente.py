@@ -18,9 +18,12 @@ operaciones que el edge necesita —ver backend/privilegios.py— requiere eso.
 import os
 
 from supabase import create_client, Client
+from supabase.lib.client_options import ClientOptions
 
-from config.settings import SUPABASE_URL
-from backend.claves import elegir_clave, clave_realtime, texto_aviso
+from config.settings import SUPABASE_URL, SUPABASE_ANON_KEY
+from backend.claves import (
+    elegir_clave, clave_realtime, texto_aviso, EDGE, ClaveAusenteError,
+)
 
 _cliente: Client | None = None
 
@@ -43,9 +46,50 @@ def obtener_cliente() -> Client:
         if "NO_PROXY" in os.environ:
             del os.environ["NO_PROXY"]
 
-        _cliente = create_client(SUPABASE_URL, clave)
+        _cliente = create_client(*_argumentos_cliente(clave, modo_clave))
 
     return _cliente
+
+
+def _argumentos_cliente(clave, modo):
+    """
+    Monta (url, apikey, options) segun el tipo de clave.
+
+    Supabase usa DOS cabeceras distintas y no son intercambiables:
+
+      apikey          -> la mira la puerta de entrada del proyecto, y SOLO
+                         acepta la clave anon o la service_role.
+      Authorization   -> la mira PostgREST para decidir con que rol de
+                         Postgres ejecuta la consulta. Acepta cualquier JWT
+                         valido del proyecto.
+
+    Con la clave de dispositivo hay que separarlas: la anon en `apikey` para
+    pasar la puerta, y el token del edge en `Authorization` para que PostgREST
+    cambie al rol depthguard_edge. Ponerlo en las dos, que es lo que hacia
+    antes create_client(url, clave), devuelve 401 "Invalid API key" con la
+    pista literal "Double check your Supabase `anon` or `service_role` API
+    key" — la puerta rechaza el token del edge porque no es ninguna de esas
+    dos, sin llegar a mirar la firma.
+
+    Con service_role no hace falta separarlas: esa clave si vale como apikey.
+    """
+    if modo != EDGE:
+        return SUPABASE_URL, clave, None
+
+    if not SUPABASE_ANON_KEY:
+        raise ClaveAusenteError(
+            "Con SUPABASE_EDGE_KEY hace falta tambien SUPABASE_ANON_KEY.\n"
+            "   La puerta de entrada de Supabase solo acepta la clave anon o "
+            "la service_role\n"
+            "   en la cabecera apikey; el token del edge va aparte, en "
+            "Authorization."
+        )
+
+    return (
+        SUPABASE_URL,
+        SUPABASE_ANON_KEY,
+        ClientOptions(headers={"Authorization": f"Bearer {clave}"}),
+    )
 
 
 def clave_sin_privilegios() -> str:
