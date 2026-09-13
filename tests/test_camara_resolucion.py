@@ -258,23 +258,52 @@ class TestPreparaCrop(unittest.TestCase):
 
     def test_sin_reduccion_devuelve_el_mismo_frame(self):
         reducido = np.zeros((480, 640, 3), dtype=np.uint8)
-        img, bbox, rgb_full = self.preparar(
-            reducido, (10, 10, 100, 130), None, 1.0, None
+        puntos = np.array([[10.0, 20.0], [30.0, 40.0]])
+        img, bbox, rgb_full, pts = self.preparar(
+            reducido, (10, 10, 100, 130), None, 1.0, None, puntos
         )
         self.assertIs(img, reducido)
         self.assertEqual(bbox, (10, 10, 100, 130))
         self.assertIsNone(rgb_full)
+        # Sin reduccion los landmarks ya estan en las coordenadas correctas
+        self.assertIs(pts, puntos)
 
     def test_con_reduccion_recorta_del_nativo(self):
         reducido = np.zeros((480, 640, 3), dtype=np.uint8)
         nativo = np.zeros((960, 1280, 3), dtype=np.uint8)
 
-        img, bbox, rgb_full = self.preparar(
+        img, bbox, rgb_full, _ = self.preparar(
             reducido, (10, 10, 100, 130), nativo, 2.0, None
         )
         self.assertEqual(img.shape[:2], (960, 1280))
         self.assertEqual(bbox, (20, 20, 200, 260))
         self.assertIsNotNone(rgb_full)
+
+    def test_los_landmarks_se_reproyectan_con_el_bbox(self):
+        # El motor ONNX alinea el rostro por 5 landmarks. Si el bbox se
+        # reproyecta al frame nativo pero los puntos no, la alineacion se
+        # calcularia con coordenadas del frame reducido sobre una imagen del
+        # doble de tamano: el rostro saldria de donde no esta.
+        reducido = np.zeros((480, 640, 3), dtype=np.uint8)
+        nativo = np.zeros((960, 1280, 3), dtype=np.uint8)
+        puntos = np.array([[100.0, 50.0], [200.0, 75.0]])
+
+        _, _, _, pts = self.preparar(
+            reducido, (10, 10, 100, 130), nativo, 2.0, None, puntos
+        )
+        np.testing.assert_allclose(pts, [[200.0, 100.0], [400.0, 150.0]])
+        # Y no se modifica el array original, que el pipeline sigue usando
+        # para el liveness en coordenadas del frame reducido.
+        np.testing.assert_allclose(puntos, [[100.0, 50.0], [200.0, 75.0]])
+
+    def test_sin_landmarks_no_falla(self):
+        # El motor dlib no los necesita, asi que el camino sin puntos existe.
+        nativo = np.zeros((960, 1280, 3), dtype=np.uint8)
+        _, _, _, pts = self.preparar(
+            np.zeros((480, 640, 3), dtype=np.uint8),
+            (10, 10, 100, 130), nativo, 2.0, None, None
+        )
+        self.assertIsNone(pts)
 
     def test_la_conversion_rgb_se_reutiliza_entre_rostros(self):
         # Convertir el frame nativo a RGB por CADA rostro del frame seria
@@ -282,10 +311,10 @@ class TestPreparaCrop(unittest.TestCase):
         reducido = np.zeros((480, 640, 3), dtype=np.uint8)
         nativo = np.zeros((960, 1280, 3), dtype=np.uint8)
 
-        _, _, cache = self.preparar(
+        _, _, cache, _ = self.preparar(
             reducido, (10, 10, 100, 130), nativo, 2.0, None
         )
-        img2, _, cache2 = self.preparar(
+        img2, _, cache2, _ = self.preparar(
             reducido, (200, 100, 300, 240), nativo, 2.0, cache
         )
         self.assertIs(cache2, cache)
