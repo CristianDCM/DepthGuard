@@ -55,7 +55,10 @@ TABLAS = [
         recurso="historial",
         operaciones=("insert",),
         usado_en="backend/supabase_sync.py",
-        nota="Eventos de acceso, desconocido y fraude.",
+        nota="Eventos de acceso, desconocido y fraude. Se insertan con "
+             "returning='minimal': por defecto PostgREST devuelve la fila "
+             "insertada y para eso exige LECTURA, que el edge no tiene sobre "
+             "historial a proposito.",
     ),
     Privilegio(
         recurso="historial",
