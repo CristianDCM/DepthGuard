@@ -109,21 +109,20 @@ create policy webrtc_edge_publica on realtime.messages
 -- ---------------------------------------------------------------------------
 -- 2. Cambio en el frontend (DepthGuard_Design)
 -- ---------------------------------------------------------------------------
--- En src/components/WebRTCPlayer.tsx, donde hoy pone:
+-- YA ESTA HECHO, en la rama claude/seguridad-c2-c5 de DepthGuard_Design:
+-- src/components/WebRTCPlayer.tsx llama a supabase.realtime.setAuth() y crea
+-- el canal como privado cuando VITE_WEBRTC_CANAL_PRIVADO=true.
 --
---     const canalNombre = `webrtc-signaling-${cameraId}`;
---     const canal = supabase.channel(canalNombre);
+-- setAuth() es imprescindible para el canal privado: sin el, la conexion
+-- Realtime no lleva el JWT de la sesion y la RLS no tiene identidad contra la
+-- que evaluar.
 --
--- queda:
+-- Los DOS flags deben activarse a la vez:
+--     edge    .env     WEBRTC_CANAL_PRIVADO=true
+--     Vercel  env      VITE_WEBRTC_CANAL_PRIVADO=true   (+ redeploy)
 --
---     const canalNombre = `webrtc-signaling-${cameraId}`;
---     await supabase.realtime.setAuth();          // identidad de la sesion
---     const canal = supabase.channel(canalNombre, {
---       config: { private: true },
---     });
---
--- setAuth() es imprescindible: sin el, la conexion Realtime no lleva el JWT
--- de la sesion y la RLS no tiene identidad contra la que evaluar.
+-- No esta documentado que un cliente privado y uno publico se vean en el
+-- mismo topic, asi que activar solo uno podria dejar el monitor sin video.
 
 
 -- ---------------------------------------------------------------------------

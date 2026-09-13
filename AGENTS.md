@@ -77,9 +77,12 @@ to the edge key. That is worth it — "nobody unauthorized can even join" beats
 "whoever joins holds fewer table grants" — and the edge key stays bounded by
 its own RLS.
 
-**Order:** apply the SQL → change the frontend (`setAuth()` +
-`{ config: { private: true } }`) → set `WEBRTC_CANAL_PRIVADO=true`. Doing the
-first and last without the frontend leaves the panel without video.
+**Frontend side is done** (branch `claude/seguridad-c2-c5` of
+`DepthGuard_Design`), behind `VITE_WEBRTC_CANAL_PRIVADO`. Flip **both** flags
+together — the edge's `WEBRTC_CANAL_PRIVADO` and Vercel's
+`VITE_WEBRTC_CANAL_PRIVADO` — because it is not documented that a private and
+a public client see each other on the same topic, and flipping only one could
+leave the monitor without video.
 
 ## Security posture at startup
 
@@ -121,10 +124,11 @@ the history). The preview gets 1 hour, renewed by every heartbeat.
 
 **Turning it on takes three steps, in this order:**
 
-1. Change the frontend to read `preview_url` from the active camera in
-   `estado_sistema.camaras` instead of building the preview URL from the file
-   name. Event photos need **no** frontend change — `historial.foto_url` is
-   still a URL, just a signed one.
+1. Deploy the frontend that reads `preview_url` from the active camera in
+   `estado_sistema.camaras` — **already done** in branch
+   `claude/seguridad-c2-c5` of `DepthGuard_Design`, with a fallback to the
+   legacy public URL so there is no window without an image. Event photos need
+   **no** frontend change — `historial.foto_url` is still a URL, just signed.
 2. Apply `supabase/rls_edge.sql` section 4 (flips the bucket to private).
 3. Set `STORAGE_PRIVADO=true`.
 

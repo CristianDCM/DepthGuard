@@ -226,11 +226,16 @@ update storage.buckets set public = false where id = 'capturas';
 --     nombre del fichero. Tiene que leer `preview_url` de la camara activa en
 --     estado_sistema.camaras, que el heartbeat renueva cada 30s.
 --
--- ORDEN DE APLICACION (importante):
---   1. Cambiar el frontend para que lea preview_url de estado_sistema.
+-- ORDEN DE APLICACION:
+--   1. Desplegar el frontend con el soporte de preview_url.
 --   2. Ejecutar este update.
 --   3. Poner STORAGE_PRIVADO=true en el .env del edge.
--- Si haces (2) sin (1), el preview se queda en negro.
+--
+-- El frontend YA lleva ese soporte (rama claude/seguridad-c2-c5 de
+-- DepthGuard_Design) y cae a la URL publica heredada si el edge todavia no
+-- publica preview_url, asi que no hay ventana sin imagen. Aun asi, haz (2)
+-- despues de (1): si cierras el bucket con un frontend antiguo desplegado, el
+-- preview se queda en negro hasta que despliegues.
 
 -- Quien puede leer las capturas con su propia sesion (no por URL firmada).
 -- CORRECCION: aqui tambien se proponia comprobar `public.admin`, que no
