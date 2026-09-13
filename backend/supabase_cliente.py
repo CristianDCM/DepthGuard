@@ -17,8 +17,7 @@ operaciones que el edge necesita —ver backend/privilegios.py— requiere eso.
 
 import os
 
-from supabase import create_client, Client
-from supabase.lib.client_options import ClientOptions
+from supabase import create_client, Client, ClientOptions
 
 from config.settings import SUPABASE_URL, SUPABASE_ANON_KEY
 from backend.claves import (
