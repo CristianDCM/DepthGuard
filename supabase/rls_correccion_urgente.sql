@@ -130,9 +130,22 @@ create policy estado_lectura_autenticada on public.estado_sistema
 -- ---------------------------------------------------------------------------
 -- 5. suscripciones_push
 -- ---------------------------------------------------------------------------
--- La politica "Admins manage own push subscriptions" (auth.uid() = user_id)
--- ya era correcta y SE MANTIENE. Solo se elimina la de `public` que la
--- anulaba: con ella, cualquiera leia y escribia las suscripciones de todos.
+-- "Escritura service role push" ({public} ALL true) ya se elimino arriba: con
+-- ella cualquiera leia y escribia las suscripciones de todos, anulando la
+-- politica buena.
+--
+-- La politica buena, `auth.uid() = user_id`, se vuelve a crear acotada a
+-- `authenticated`. Estaba sobre `public`, lo que en la practica no abria nada
+-- (auth.uid() es NULL sin sesion, y NULL = user_id nunca es cierto), pero
+-- dejarla ahi haria que la comprobacion de aceptacion de abajo —"ninguna
+-- politica sobre public o anon"— devolviera una fila y pareciera un fallo.
+
+drop policy if exists "Admins manage own push subscriptions" on public.suscripciones_push;
+
+create policy push_propias_autenticadas on public.suscripciones_push
+  for all to authenticated
+  using ((select auth.uid()) = user_id)
+  with check ((select auth.uid()) = user_id);
 
 
 commit;

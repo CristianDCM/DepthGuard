@@ -75,9 +75,19 @@ create policy webrtc_panel_publica on realtime.messages
 -- edge sigue acotada por su propia RLS, y a cambio nadie no autorizado puede
 -- siquiera entrar en el canal.
 --
--- Si todavia no has migrado la clave del edge, este rol no existe: comenta
--- estas dos politicas. El edge seguira usando service_role, que se salta la
--- RLS y entra igual.
+-- El rol se crea aqui VACIO —sin login, sin permisos, sin membresia— para que
+-- estas politicas puedan referenciarlo aunque todavia no hayas hecho la fase
+-- 1. Asi el fichero se aplica entero y no queda a medias. Sus GRANT llegan
+-- con rls_edge.sql, que lo crea de forma idempotente.
+-- Mientras tanto el edge sigue usando service_role, que se salta la RLS.
+
+do $$
+begin
+  if not exists (select 1 from pg_roles where rolname = 'depthguard_edge') then
+    create role depthguard_edge nologin noinherit;
+  end if;
+end
+$$;
 
 drop policy if exists webrtc_edge_recibe on realtime.messages;
 create policy webrtc_edge_recibe on realtime.messages
