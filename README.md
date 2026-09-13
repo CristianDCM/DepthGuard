@@ -7,7 +7,8 @@ Sistema de control de acceso biométrico con detección anti-spoofing 3D.
 DepthGuard es el **nodo edge** que corre en un PC con cámaras. Detecta rostros, verifica autenticidad 3D y envía los resultados a **Supabase Cloud** en tiempo real:
 
 - **Detectar rostros** con MediaPipe Face Mesh
-- **Verificar autenticidad 3D** analizando el mapa de profundidad (anti-spoofing)
+- **Verificar autenticidad 3D** analizando el mapa de profundidad (solo con RealSense)
+- **Prueba de vida 2D** por parpadeo, obligatoria para conceder acceso
 - **Reconocer personas** comparando embeddings faciales (face_recognition)
 - **Sincronizar con Supabase** — eventos, heartbeat y estado de cámaras
 - **Store-and-Forward** — tolerancia a cortes de internet
@@ -89,8 +90,12 @@ Configurar `MODO_CAMARA` en `.env`:
 
 | Modo | Descripción |
 |------|-------------|
-| `simulada` | Webcam + profundidad sintética (default) |
-| `realsense` | Intel RealSense D400 (requiere pyrealsense2) |
+| `simulada` | Webcam, **sin profundidad**. Anti-spoofing 3D no disponible: la prueba de vida es solo 2D (parpadeo) |
+| `realsense` | Intel RealSense D400 (requiere pyrealsense2). Anti-spoofing 3D + liveness 2D |
+
+> **Seguridad:** en despliegue real usa `realsense` y pon
+> `REQUERIR_CAMARA_3D=true` en `.env`. Con webcam la única prueba de vida es
+> el parpadeo, que detiene una foto impresa pero **no** un vídeo en bucle.
 
 ## Estructura del proyecto
 
@@ -108,7 +113,7 @@ DepthGuard/
 │   ├── estado_registro.py     # Estado thread-safe del registro
 │   ├── camara/                # Factory: simulada / realsense
 │   ├── deteccion/             # Face Mesh (MediaPipe)
-│   ├── antispoofing/          # Verificación 3D
+│   ├── antispoofing/          # Verificación 3D + liveness 2D (parpadeo)
 │   └── reconocimiento/        # Embeddings faciales
 ├── backend/
 │   ├── supabase_cliente.py    # Cliente Supabase (singleton)
