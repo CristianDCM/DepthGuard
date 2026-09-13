@@ -16,6 +16,7 @@ El matching hace tres cosas que un vecino-mas-cercano simple no hace:
      a distancia 0.42 se mostraba como 58% y parecia dudoso.
 """
 
+import hashlib
 import math
 from collections import namedtuple
 
@@ -382,6 +383,43 @@ class ReconocedorFacial:
             if not self.cache:
                 print("       NO SE RECONOCERA A NADIE hasta que se registren "
                       "de nuevo.")
+
+    def huella_cache(self):
+        """
+        Huella de las plantillas cargadas. Cambia si y solo si ellas cambian.
+
+        La usa la recarga periodica del pipeline para decidir si hace falta
+        reiniciar el reconocimiento. Sin esto, cada recarga —una por minuto—
+        obligaba a todos los presentes a volver a votar desde cero, y durante
+        esa reconquista el preview mostraba "Persona no registrada" a gente que
+        si estaba registrada.
+
+        Es INDEPENDIENTE DEL ORDEN a proposito, y no es un detalle: la consulta
+        que carga los usuarios no lleva ORDER BY, asi que Postgres puede
+        devolver las filas en otro orden entre dos llamadas. Una huella que
+        dependiera del orden cambiaria sola cada minuto sin que cambie ninguna
+        plantilla, y provocaria exactamente el reinicio que esto viene a
+        evitar: pareceria arreglado y no lo estaria. Por eso se resume cada
+        plantilla por separado y se ordenan los resumenes antes de combinarlos.
+
+        Returns:
+            str — huella hexadecimal, o "vacia" si no hay plantillas.
+        """
+        if self._matriz.shape[0] == 0:
+            return "vacia"
+
+        resumenes = []
+        for i, vector in enumerate(self._matriz):
+            usuario_id, nombre = self._identidades[self._idx_identidad[i]]
+            etiqueta = repr((usuario_id, nombre, self._angulos[i])).encode()
+            resumenes.append(hashlib.blake2b(
+                etiqueta + vector.tobytes(), digest_size=16
+            ).digest())
+
+        resumenes.sort()
+        return hashlib.blake2b(
+            b"".join(resumenes), digest_size=16
+        ).hexdigest()
 
     def recargar_cache(self, usuarios):
         """Alias para actualizar después de registrar."""
