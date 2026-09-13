@@ -201,6 +201,27 @@ create policy edge_actualiza_comandos on public.comandos_edge
 -- El edge sube fotos de eventos y el preview en vivo al bucket "capturas".
 -- Solo INSERT/UPDATE; el borrado lo hace la retencion de la seccion 6.
 
+-- Los GRANT van ANTES que las politicas: una politica solo filtra filas, y
+-- sin privilegio de tabla Postgres ni llega a evaluarla. Faltaban, y el edge
+-- daba "permission denied for schema storage" al subir una captura.
+grant usage on schema storage to depthguard_edge;
+grant select on storage.buckets to depthguard_edge;
+-- SELECT hace falta para poder escribir: el cliente resuelve el bucket, y al
+-- sobreescribir el preview comprueba si el objeto ya existe.
+-- Sin DELETE: borrar capturas no es cosa del dispositivo.
+grant select, insert, update on storage.objects to depthguard_edge;
+
+-- Leer, acotado al bucket capturas (no ve ningun otro)
+drop policy if exists edge_ve_bucket_capturas on storage.buckets;
+create policy edge_ve_bucket_capturas on storage.buckets
+  for select to depthguard_edge
+  using (id = 'capturas');
+
+drop policy if exists edge_lista_capturas on storage.objects;
+create policy edge_lista_capturas on storage.objects
+  for select to depthguard_edge
+  using (bucket_id = 'capturas');
+
 drop policy if exists edge_sube_capturas on storage.objects;
 create policy edge_sube_capturas on storage.objects
   for insert to depthguard_edge

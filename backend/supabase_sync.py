@@ -154,9 +154,21 @@ def _subir_foto_si_existe(supabase, registro: dict):
 
 
 def _enviar_a_supabase(supabase, registro: dict):
-    """Inserta un registro en la tabla historial. Si falla, lo guarda en buffer."""
+    """
+    Inserta un registro en la tabla historial. Si falla, lo guarda en buffer.
+
+    `returning="minimal"` no es un detalle de rendimiento: por defecto
+    PostgREST devuelve la fila insertada, y para eso exige permiso de LECTURA
+    sobre la tabla. El rol del edge tiene INSERT pero NO SELECT sobre
+    historial —a proposito, para que un edge comprometido no pueda leer el
+    rastro de auditoria— asi que pedir la representacion fallaba con
+    "permission denied for table historial" aunque el INSERT estuviera
+    permitido.
+    """
     try:
-        supabase.table("historial").insert(registro).execute()
+        supabase.table("historial").insert(
+            registro, returning="minimal"
+        ).execute()
     except Exception as e:
         error_str = str(e)
 
@@ -172,7 +184,9 @@ def _enviar_a_supabase(supabase, registro: dict):
             cache_invalidada.set()
 
             try:
-                supabase.table("historial").insert(registro).execute()
+                supabase.table("historial").insert(
+                    registro, returning="minimal"
+                ).execute()
                 print(f"[Sync]  Evento guardado sin usuario_id")
                 return
             except Exception as e2:
@@ -204,7 +218,9 @@ def _reintento_loop():
             try:
                 # Reintentar subir la foto si aún es ruta local
                 _subir_foto_si_existe(supabase, registro)
-                supabase.table("historial").insert(registro).execute()
+                supabase.table("historial").insert(
+                    registro, returning="minimal"
+                ).execute()
                 enviados += 1
             except Exception as e:
                 error_str = str(e)
@@ -213,7 +229,9 @@ def _reintento_loop():
                     registro["usuario_id"] = None
                     registro["nombre"] = f"{registro.get('nombre', '?')} (eliminado)"
                     try:
-                        supabase.table("historial").insert(registro).execute()
+                        supabase.table("historial").insert(
+                            registro, returning="minimal"
+                        ).execute()
                         enviados += 1
                         continue
                     except Exception:
