@@ -37,9 +37,10 @@ try:
     cli = sc.obtener_cliente()
     h = {k.lower(): v for k, v in cli.postgrest.session.headers.items()}
     print(f"   modo de clave : {sc.modo_clave}")
-    print(f"   apikey        -> rol '{rol(h.get('apikey',''))}'")
-    print(f"   Authorization -> rol '{rol(h.get('authorization',''))}'")
-    ok = rol(h.get('apikey','')) in ("anon","service_role")
+    apikey_role = rol(h.get('apikey',''))
+    print(f"   apikey        -> {'PRESENTE' if h.get('apikey') else 'AUSENTE'}")
+    print(f"   Authorization -> {'PRESENTE' if h.get('authorization') else 'AUSENTE'}")
+    ok = apikey_role in ("anon","service_role")
     print(f"\n   {'CORRECTO' if ok else 'MAL: apikey debe ser anon o service_role'}")
 except Exception as e:
     print(f"   ERROR: {type(e).__name__}: {e}")
