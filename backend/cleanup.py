@@ -19,6 +19,25 @@ from backend import almacenamiento
 from config.settings import DIAS_RETENCION, CLEANUP_EN_EDGE
 
 
+class SinPrivilegios(Exception):
+    """
+    El rol de la conexion no puede hacer la limpieza.
+
+    Se distingue de un error cualquiera porque NO es reintentable: no es que
+    la red fallara, es que este rol nunca va a poder. Reintentarlo cada 24
+    horas solo llena el log de trazas identicas.
+    """
+
+
+def es_falta_de_privilegios(error) -> bool:
+    """
+    Reconoce el 42501 de Postgres ("permission denied") en el error que
+    devuelve PostgREST, que llega como dict serializado dentro de APIError.
+    """
+    texto = str(error)
+    return "42501" in texto or "permission denied" in texto.lower()
+
+
 def _extraer_nombre_archivo(foto_url: str) -> str | None:
     """
     Extrae el nombre del archivo de una URL de Supabase Storage.
@@ -99,12 +118,30 @@ def _ejecutar_limpieza():
                 try:
                     supabase.table("historial").delete().eq("id", reg_id).execute()
                     registros_eliminados += 1
-                except Exception:
-                    pass  # Si falla uno, continuar con los demás
+                except Exception as e:
+                    # Un fallo suelto (una fila que ya no esta) no debe parar
+                    # la ronda. Pero la falta de permiso no es un fallo
+                    # suelto: se repetiria en las 500 filas y acabaria
+                    # reportando "0 eliminados" como si no hubiera nada que
+                    # limpiar, que es justo la conclusion contraria.
+                    if es_falta_de_privilegios(e):
+                        raise SinPrivilegios(
+                            "el rol no tiene permiso de borrado sobre historial"
+                        ) from e
 
         return registros_eliminados, fotos_eliminadas
 
+    except SinPrivilegios:
+        raise
+
     except Exception as e:
+        if es_falta_de_privilegios(e):
+            # La consulta que busca los registros caducados necesita LECTURA
+            # sobre historial, y el rol del edge no la tiene a proposito.
+            raise SinPrivilegios(
+                "el rol no tiene permiso de lectura sobre historial"
+            ) from e
+
         print(f"    Error durante la limpieza: {e}")
         traceback.print_exc()
         return registros_eliminados, fotos_eliminadas
@@ -134,6 +171,18 @@ def iniciar_cleanup(intervalo_horas: int = 24):
             inicio = time.time()
             registros, fotos = _ejecutar_limpieza()
             duracion = round(time.time() - inicio, 1)
+
+        except SinPrivilegios as e:
+            # Permanente: no tiene sentido volver a intentarlo manana.
+            print(f" Cleanup: DETENIDO — {e}.")
+            print("    Es lo esperado con la clave restringida del edge:")
+            print("    borrar el historico no es un privilegio del dispositivo.")
+            print("    Pon CLEANUP_EN_EDGE=false y programa la retencion en la")
+            print("    base de datos (seccion 6 de supabase/rls_edge.sql).")
+            print("    OJO: sin esa tarea programada, la retencion NO se hace")
+            print("    sola y el historial crecera sin limite.")
+            return
+
 
             if registros > 0 or fotos > 0:
                 print(f"    Limpieza completada en {duracion}s:")
