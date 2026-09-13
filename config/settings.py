@@ -201,6 +201,19 @@ TURN_URL        = _env.get("TURN_URL", "turn:global.relay.metered.ca:80")
 TURN_USERNAME   = _env.get("TURN_USERNAME", "")
 TURN_CREDENTIAL = _env.get("TURN_CREDENTIAL", "")
 
+# === ALMACENAMIENTO DE CAPTURAS (hallazgo C5) ===
+#
+# false = bucket publico con get_public_url (comportamiento heredado): las
+# fotos faciales de cada acceso y el preview en vivo quedan en URLs sin
+# autenticacion ni caducidad.
+#
+# true = URLs firmadas que caducan. Requiere DOS cosas antes de activarlo:
+#   1. Aplicar supabase/rls_edge.sql (seccion 4) para poner el bucket privado.
+#   2. Que el frontend lea la URL del preview de estado_sistema.camaras en
+#      lugar de construirla a partir del nombre del fichero.
+# Sin (2) el preview en vivo se queda en negro.
+STORAGE_PRIVADO = _env.get("STORAGE_PRIVADO", "false").lower() == "true"
+
 # === RETENCIÓN DE DATOS ===
 DIAS_RETENCION = int(_env.get("DIAS_RETENCION", "30"))
 

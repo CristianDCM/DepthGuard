@@ -28,8 +28,17 @@ DIRS_ESCANEADOS = ("backend", "motor_ia", "config")
 
 # .table("x") / .table('x')
 RE_TABLA = re.compile(r"\.table\(\s*[\"']([^\"']+)[\"']")
-# .from_("x")  (storage)
-RE_BUCKET = re.compile(r"\.from_\(\s*[\"']([^\"']+)[\"']")
+
+# Buckets de Storage. Se reconocen dos formas:
+#   - el literal:            .from_("capturas")
+#   - la constante central:  BUCKET = "capturas"  en backend/almacenamiento.py
+# El acceso a Storage esta centralizado en ese modulo, asi que el literal casi
+# no aparece ya; sin la segunda forma este escaner se quedaria a ciegas.
+RE_BUCKET = re.compile(
+    r"\.from_\(\s*[\"']([^\"']+)[\"']"
+    r"|^BUCKET\s*=\s*[\"']([^\"']+)[\"']",
+    re.MULTILINE,
+)
 
 
 def _ficheros_python():
@@ -50,6 +59,12 @@ def _buscar(patron):
         with open(ruta, encoding="utf-8") as fh:
             contenido = fh.read()
         for valor in patron.findall(contenido):
+            # Un patron con varias alternativas devuelve tuplas; queda el
+            # unico grupo que caso.
+            if isinstance(valor, tuple):
+                valor = next((v for v in valor if v), None)
+            if not valor:
+                continue
             rel = os.path.relpath(ruta, RAIZ)
             hallazgos.setdefault(valor, []).append(rel)
     return hallazgos
@@ -110,6 +125,43 @@ class TestInventarioCompleto(unittest.TestCase):
         """
         self.assertGreater(len(_buscar(RE_TABLA)), 0, "el escaner no halla tablas")
         self.assertGreater(len(_buscar(RE_BUCKET)), 0, "el escaner no halla buckets")
+
+
+class TestStorageCentralizado(unittest.TestCase):
+    """
+    Todo el acceso a Storage pasa por backend/almacenamiento.py, que es donde
+    se decide si la URL es publica o firmada. Un `.from_("capturas")` suelto
+    en otro sitio se saltaria esa decision.
+    """
+
+    def test_el_bucket_se_declara_en_un_solo_sitio(self):
+        definiciones = _buscar(re.compile(
+            r"^BUCKET\s*=\s*[\"']([^\"']+)[\"']", re.MULTILINE))
+        for bucket, ficheros in definiciones.items():
+            self.assertEqual(
+                ficheros, ["backend/almacenamiento.py"],
+                f"el bucket '{bucket}' se define fuera del modulo central: {ficheros}"
+            )
+
+    def test_no_quedan_urls_publicas_fuera_del_modulo(self):
+        """
+        get_public_url solo puede aparecer en almacenamiento.py, que es quien
+        elige entre publica y firmada segun STORAGE_PRIVADO.
+        """
+        fugas = []
+        for ruta in _ficheros_python():
+            rel = os.path.relpath(ruta, RAIZ)
+            if rel == os.path.join("backend", "almacenamiento.py"):
+                continue
+            with open(ruta, encoding="utf-8") as fh:
+                # La LLAMADA, no la palabra: settings.py la menciona en un
+                # comentario y eso no es una fuga.
+                if re.search(r"\.get_public_url\s*\(", fh.read()):
+                    fugas.append(rel)
+        self.assertEqual(
+            fugas, [],
+            f"get_public_url usado fuera del modulo de almacenamiento: {fugas}"
+        )
 
 
 class TestInventario(unittest.TestCase):

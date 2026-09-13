@@ -34,6 +34,7 @@ Set `MODO_CAMARA` in `.env`:
 | `backend/claves.py` | Key-selection policy: restricted key wins, service_role fails closed |
 | `backend/privilegios.py` | Authoritative inventory of every privileged op the edge performs |
 | `backend/autorizacion_registro.py` | Authorizes enrolment commands before the edge writes biometrics |
+| `backend/almacenamiento.py` | Storage access: public vs signed URLs for capture images |
 | `supabase/rls_edge.sql` | Restricted role + RLS policies implementing that inventory |
 | `backend/supabase_sync.py` | Store-and-forward: queue → Supabase historial |
 | `backend/heartbeat.py` | Updates estado_sistema.ultimo_heartbeat every 30s |
@@ -44,6 +45,41 @@ Set `MODO_CAMARA` in `.env`:
 - Requires Intel RealSense SDK if `MODO_CAMARA=realsense`
 - Requires `.env` file with `SUPABASE_URL` and `SUPABASE_SERVICE_KEY`
 - Supabase tables must be created beforehand (see DISEÑO_SISTEMA.md)
+
+## Capture storage (biometric images)
+
+The `capturas` bucket was public and the code used `get_public_url()`. Face
+photos from every access event, and the live preview frame, sat at URLs with
+**no authentication and no expiry** — the preview at a fixed, guessable path
+refreshed every 2s. These are images of identified people.
+
+All storage access now goes through `backend/almacenamiento.py`, which serves
+either public or **signed, expiring** URLs based on `STORAGE_PRIVADO`.
+`tests/test_privilegios.py` enforces that `get_public_url` appears nowhere else,
+so no code path can quietly bypass that decision.
+
+| Variable | What it does |
+|----------|--------------|
+| `STORAGE_PRIVADO` | `false` (default) keeps the legacy public URLs and warns at startup. `true` issues signed URLs that expire |
+
+Signed URL lifetimes: event photos get `DIAS_RETENCION + 1` days, so a URL
+never expires *before* cleanup deletes its record (which would leave holes in
+the history). The preview gets 1 hour, renewed by every heartbeat.
+
+**Turning it on takes three steps, in this order:**
+
+1. Change the frontend to read `preview_url` from the active camera in
+   `estado_sistema.camaras` instead of building the preview URL from the file
+   name. Event photos need **no** frontend change — `historial.foto_url` is
+   still a URL, just a signed one.
+2. Apply `supabase/rls_edge.sql` section 4 (flips the bucket to private).
+3. Set `STORAGE_PRIVADO=true`.
+
+Doing step 2 before step 1 leaves the live preview blank.
+
+The filename is not a security control and is not treated as one: privacy
+comes from the bucket policy. Once the bucket is private, a guessable path is
+harmless.
 
 ## Enrolment authorization
 

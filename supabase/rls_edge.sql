@@ -190,11 +190,40 @@ create policy edge_reemplaza_preview on storage.objects
   for update to depthguard_edge
   using (bucket_id = 'capturas');
 
--- NOTA (hallazgo C5, PENDIENTE): el bucket "capturas" es publico hoy. El
--- codigo usa get_public_url(), asi que las fotos faciales de cada evento y el
--- preview en vivo quedan en URLs sin autenticacion ni caducidad, con ruta
--- adivinable (live_preview.jpg). Arreglarlo requiere ademas cambiar el codigo
--- a URLs firmadas, asi que va en su propio cambio.
+-- --- Bucket PRIVADO (hallazgo C5) ---
+-- Mientras "capturas" sea publico, las fotos faciales de cada acceso y el
+-- preview en vivo son legibles por cualquiera que tenga o adivine la URL, sin
+-- caducidad. Son imagenes de personas identificadas.
+
+update storage.buckets set public = false where id = 'capturas';
+
+-- Con el bucket privado, leer un objeto exige una URL firmada. El edge las
+-- genera (backend/almacenamiento.py) y el frontend las consume:
+--   - fotos de evento: la URL firmada va en historial.foto_url, igual que
+--     antes. El frontend NO necesita ningun cambio para esto.
+--   - preview en vivo: el frontend ya NO puede construir la URL a partir del
+--     nombre del fichero. Tiene que leer `preview_url` de la camara activa en
+--     estado_sistema.camaras, que el heartbeat renueva cada 30s.
+--
+-- ORDEN DE APLICACION (importante):
+--   1. Cambiar el frontend para que lea preview_url de estado_sistema.
+--   2. Ejecutar este update.
+--   3. Poner STORAGE_PRIVADO=true en el .env del edge.
+-- Si haces (2) sin (1), el preview se queda en negro.
+
+-- Quien puede leer las capturas con su propia sesion (no por URL firmada).
+-- Ajusta la condicion a tu modelo de administradores.
+--
+--   drop policy if exists admin_lee_capturas on storage.objects;
+--   create policy admin_lee_capturas on storage.objects
+--     for select to authenticated
+--     using (
+--       bucket_id = 'capturas'
+--       and exists (select 1 from public.admin a where a.id = auth.uid())
+--     );
+--
+-- COMPROBACION: pedir la URL publica de una captura debe devolver 400/404, y
+-- la URL firmada debe funcionar hasta que caduque.
 
 
 -- ---------------------------------------------------------------------------

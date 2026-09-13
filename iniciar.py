@@ -31,6 +31,7 @@ from config.settings import CAPTURAS_DIR, MODO_CAMARA, SUPABASE_URL, DIAS_RETENC
 from motor_ia.pipeline import ejecutar_pipeline
 from motor_ia.estado_registro import EstadoRegistro
 from backend.supabase_cliente import obtener_cliente, avisar_si_clave_insegura
+from backend import almacenamiento
 from backend.claves import ClaveInseguraError, ClaveAusenteError
 from backend.supabase_sync import iniciar_sync
 from backend.heartbeat import iniciar_heartbeat, apagar_camaras
@@ -62,6 +63,10 @@ except (ClaveInseguraError, ClaveAusenteError) as e:
     sys.exit(1)
 
 avisar_si_clave_insegura()
+
+_aviso_storage = almacenamiento.texto_aviso()
+if _aviso_storage:
+    print(_aviso_storage)
 
 # Cola de eventos: Pipeline IA → Sync Supabase
 cola_eventos = queue.Queue()

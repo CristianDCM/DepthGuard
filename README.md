@@ -131,6 +131,7 @@ DepthGuard/
 │   ├── claves.py              # Política de selección de clave
 │   ├── privilegios.py         # Inventario de privilegios del edge
 │   ├── autorizacion_registro.py # Autoriza los comandos de enrolamiento
+│   ├── almacenamiento.py      # URLs públicas vs firmadas de capturas
 │   ├── supabase_sync.py       # Store-and-Forward → historial
 │   └── heartbeat.py           # Heartbeat cada 30s
 ├── scripts/

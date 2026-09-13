@@ -15,6 +15,7 @@ import datetime
 import traceback
 
 from backend.supabase_cliente import obtener_cliente
+from backend import almacenamiento
 from config.settings import DIAS_RETENCION, CLEANUP_EN_EDGE
 
 
@@ -82,7 +83,7 @@ def _ejecutar_limpieza():
                 # Eliminar en lotes de 50
                 for i in range(0, len(archivos_a_eliminar), 50):
                     lote = archivos_a_eliminar[i:i + 50]
-                    supabase.storage.from_("capturas").remove(lote)
+                    supabase.storage.from_(almacenamiento.BUCKET).remove(lote)
                     fotos_eliminadas += len(lote)
             except Exception as e:
                 print(f"    Error eliminando fotos del Storage: {e}")
