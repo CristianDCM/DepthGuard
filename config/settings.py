@@ -151,54 +151,6 @@ LIVENESS_TEXTURA_BLOQUEA = _env.get("LIVENESS_TEXTURA_BLOQUEA", "false").lower()
 LIVENESS_MOIRE_MAX = float(_env.get("LIVENESS_MOIRE_MAX", "0.35"))
 LIVENESS_ESPECULAR_MAX = float(_env.get("LIVENESS_ESPECULAR_MAX", "0.08"))
 
-# === RECONOCIMIENTO ===
-TOLERANCIA_FACIAL = float(_env.get("TOLERANCIA_FACIAL", "0.50"))
-COOLDOWN_EMBEDDING = float(_env.get("COOLDOWN_EMBEDDING", "2.0"))
-
-# Cadencia de embeddings MIENTRAS la votacion temporal aun no decide.
-# Con la cadencia lenta (COOLDOWN_EMBEDDING) reunir VOTOS_REQUERIDOS
-# tardaria varios segundos, demasiado para un control de acceso; una vez
-# hay veredicto se vuelve a la cadencia lenta, que solo re-confirma.
-COOLDOWN_EMBEDDING_VOTACION = float(_env.get("COOLDOWN_EMBEDDING_VOTACION", "0.4"))
-
-# Maximo de embeddings que se generan en un mismo frame.
-# El bucle del pipeline es de un solo hilo y un embedding cuesta del orden
-# de 50-150 ms segun CPU, asi que sin tope N personas en el frame
-# multiplicarian por N el tiempo de frame. Con tope, el coste anadido por
-# frame esta acotado y las personas se reparten los turnos entre frames.
-MAX_EMBEDDINGS_POR_FRAME = int(_env.get("MAX_EMBEDDINGS_POR_FRAME", "1"))
-COOLDOWN_ANTISPOOFING = float(_env.get("COOLDOWN_ANTISPOOFING", "0.3"))
-COOLDOWN_EVENTO = int(_env.get("COOLDOWN_EVENTO", "5"))
-
-# Margen minimo de separacion entre la mejor identidad y la segunda mejor
-# identidad DISTINTA. Si dos personas distintas quedan igual de cerca del
-# rostro consultado, es un empate y se rechaza en vez de adivinar.
-# Subirlo = menos falsos positivos, mas "DESCONOCIDO".
-MARGEN_IDENTIDAD = float(_env.get("MARGEN_IDENTIDAD", "0.06"))
-
-# Ancho de la sigmoide que convierte distancia -> confianza 0..1.
-# A distancia == TOLERANCIA_FACIAL la confianza es exactamente 0.50.
-# Mas pequeno = transicion mas abrupta alrededor del umbral.
-ESCALA_CONFIANZA = float(_env.get("ESCALA_CONFIANZA", "0.07"))
-
-# Penalizacion aplicada a las plantillas registradas en un angulo distinto
-# al de la pose detectada. Es una pista suave, no un filtro: si la pose se
-# estima mal, el coste maximo es esta cantidad de distancia.
-PENALIZACION_POSE = float(_env.get("PENALIZACION_POSE", "0.02"))
-
-# Rango de pose dentro del cual se intenta reconocer. Fuera de esto el
-# rostro esta demasiado girado y el embedding no es fiable.
-MAX_YAW_RECONOCIMIENTO = float(_env.get("MAX_YAW_RECONOCIMIENTO", "35"))
-MAX_PITCH_RECONOCIMIENTO = float(_env.get("MAX_PITCH_RECONOCIMIENTO", "30"))
-
-# Votacion temporal: identificaciones que se acumulan por persona y
-# cuantas deben coincidir antes de emitir un evento.
-VOTOS_VENTANA = int(_env.get("VOTOS_VENTANA", "5"))
-VOTOS_REQUERIDOS = int(_env.get("VOTOS_REQUERIDOS", "3"))
-
-# num_jitters de dlib al generar embeddings. En registro conviene subirlo
-# (promedia varias transformaciones -> plantilla mas estable) porque ocurre
-# una sola vez; en reconocimiento se queda en 1 por coste de CPU.
 # === MOTOR DE EMBEDDINGS ===
 #
 # "dlib" = face_recognition, 128 dimensiones. Lo historico.
@@ -261,6 +213,76 @@ TOLERANCIA_FACIAL_ONNX = float(_env.get("TOLERANCIA_FACIAL_ONNX", "1.095"))
 MARGEN_IDENTIDAD_ONNX = float(_env.get("MARGEN_IDENTIDAD_ONNX", "0.10"))
 ESCALA_CONFIANZA_ONNX = float(_env.get("ESCALA_CONFIANZA_ONNX", "0.12"))
 
+# === RECONOCIMIENTO ===
+TOLERANCIA_FACIAL = float(_env.get("TOLERANCIA_FACIAL", "0.50"))
+COOLDOWN_EMBEDDING = float(_env.get("COOLDOWN_EMBEDDING", "2.0"))
+
+# Cadencia de embeddings MIENTRAS la votacion temporal aun no decide.
+# Con la cadencia lenta (COOLDOWN_EMBEDDING) reunir VOTOS_REQUERIDOS
+# tardaria varios segundos, demasiado para un control de acceso; una vez
+# hay veredicto se vuelve a la cadencia lenta, que solo re-confirma.
+#
+# El defecto depende del motor porque el coste por rostro cambia en dos
+# ordenes de magnitud (217 ms con dlib, 3-7 ms con onnx, medido en el equipo
+# del edge). Con onnx se puede votar mas a menudo y decidir antes.
+#
+# No se baja mas de 0.2 s a proposito: la votacion temporal existe para
+# muestrear INSTANTES DISTINTOS. Los landmarks del detector bailan entre
+# frames —medido: mueven el embedding un 13% del umbral de mediana— y esa
+# variacion es justo lo que la votacion promedia. Votar cada 20 ms daria tres
+# votos casi del mismo instante: tres veces el mismo ruido, no tres muestras.
+COOLDOWN_EMBEDDING_VOTACION = float(_env.get(
+    "COOLDOWN_EMBEDDING_VOTACION", "0.2" if MOTOR_EMBEDDING == "onnx" else "0.4"
+))
+
+# Maximo de rostros de los que se saca embedding en un mismo frame.
+#
+# El tope existe porque el bucle del pipeline es de un solo hilo: sin el, N
+# personas en el frame multiplicarian por N el tiempo de frame. Con dlib eso
+# es fatal (217 ms por rostro: cinco personas serian 1,1 s de frame) y el tope
+# debe quedarse en 1, repartiendo los turnos entre frames.
+#
+# Con onnx los N rostros van en UNA sola inferencia por lote, asi que el coste
+# no crece linealmente: medido, 1 rostro 7,6 ms y 5 rostros 26 ms (5,2 ms cada
+# uno). Ahi el tope de 1 no protegia de nada y solo retrasaba la
+# identificacion: cinco personas necesitaban cinco frames por ronda de votos
+# pudiendo ir en una. El defecto sube al maximo de rostros que detecta el
+# pipeline, de forma que todos los presentes se identifican a la vez.
+MAX_EMBEDDINGS_POR_FRAME = int(_env.get(
+    "MAX_EMBEDDINGS_POR_FRAME", "5" if MOTOR_EMBEDDING == "onnx" else "1"
+))
+COOLDOWN_ANTISPOOFING = float(_env.get("COOLDOWN_ANTISPOOFING", "0.3"))
+COOLDOWN_EVENTO = int(_env.get("COOLDOWN_EVENTO", "5"))
+
+# Margen minimo de separacion entre la mejor identidad y la segunda mejor
+# identidad DISTINTA. Si dos personas distintas quedan igual de cerca del
+# rostro consultado, es un empate y se rechaza en vez de adivinar.
+# Subirlo = menos falsos positivos, mas "DESCONOCIDO".
+MARGEN_IDENTIDAD = float(_env.get("MARGEN_IDENTIDAD", "0.06"))
+
+# Ancho de la sigmoide que convierte distancia -> confianza 0..1.
+# A distancia == TOLERANCIA_FACIAL la confianza es exactamente 0.50.
+# Mas pequeno = transicion mas abrupta alrededor del umbral.
+ESCALA_CONFIANZA = float(_env.get("ESCALA_CONFIANZA", "0.07"))
+
+# Penalizacion aplicada a las plantillas registradas en un angulo distinto
+# al de la pose detectada. Es una pista suave, no un filtro: si la pose se
+# estima mal, el coste maximo es esta cantidad de distancia.
+PENALIZACION_POSE = float(_env.get("PENALIZACION_POSE", "0.02"))
+
+# Rango de pose dentro del cual se intenta reconocer. Fuera de esto el
+# rostro esta demasiado girado y el embedding no es fiable.
+MAX_YAW_RECONOCIMIENTO = float(_env.get("MAX_YAW_RECONOCIMIENTO", "35"))
+MAX_PITCH_RECONOCIMIENTO = float(_env.get("MAX_PITCH_RECONOCIMIENTO", "30"))
+
+# Votacion temporal: identificaciones que se acumulan por persona y
+# cuantas deben coincidir antes de emitir un evento.
+VOTOS_VENTANA = int(_env.get("VOTOS_VENTANA", "5"))
+VOTOS_REQUERIDOS = int(_env.get("VOTOS_REQUERIDOS", "3"))
+
+# num_jitters de dlib al generar embeddings. En registro conviene subirlo
+# (promedia varias transformaciones -> plantilla mas estable) porque ocurre
+# una sola vez; en reconocimiento se queda en 1 por coste de CPU.
 JITTERS_REGISTRO = int(_env.get("JITTERS_REGISTRO", "3"))
 JITTERS_RECONOCIMIENTO = int(_env.get("JITTERS_RECONOCIMIENTO", "1"))
 
