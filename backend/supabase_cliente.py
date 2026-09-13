@@ -53,10 +53,21 @@ def clave_sin_privilegios() -> str:
     return clave_realtime()
 
 
+def modo_clave_actual():
+    """
+    Con que clave se esta operando: "edge", "service_role" o
+    "sin_configurar". Es una funcion y no la variable, porque el modo se fija
+    al crear el cliente; importar la variable la congelaria en su valor
+    inicial.
+    """
+    return modo_clave
+
+
 def avisar_si_clave_insegura():
     """
-    Imprime el aviso de arranque si se opera con service_role.
-    Llamar una vez desde iniciar.py, despues de crear el cliente.
+    Aviso suelto de service_role. El arranque usa el informe de postura
+    (backend/postura_seguridad.py), que cubre esto y el resto; esto queda
+    para usos puntuales.
     """
     aviso = texto_aviso(modo_clave)
     if aviso:

@@ -88,6 +88,10 @@ CLEANUP_EN_EDGE=false
 python iniciar.py
 ```
 
+Al arrancar imprime un **informe de postura de seguridad** con los ajustes que
+siguen en valores de desarrollo y cómo corregirlos. Con `MODO_PRODUCCION=true`,
+los hallazgos graves **abortan el arranque** en lugar de quedarse en un aviso.
+
 La aplicación inicia tres hilos:
 1. **Pipeline IA** — cámara → detección → anti-spoofing → reconocimiento
 2. **Sync Supabase** — eventos del pipeline → INSERT en tabla `historial`
@@ -146,12 +150,19 @@ DepthGuard/
 python scripts/crear_admin.py
 ```
 
-## Admin por defecto
+## Administradores
 
-- **Usuario:** `admin`
-- **Contraseña:** `admin123`
+**No hay usuario ni contraseña por defecto, a propósito.** Este repositorio
+publicaba `admin` / `admin123`, lo que convertía ese valor en una credencial
+conocida por cualquiera que viera el repo.
 
-Cambiar en `.env` (`ADMIN_USUARIO`, `ADMIN_PASSWORD`).
+Las credenciales de administrador **no son cosa del nodo edge**: la
+autenticación vive en el frontend / Supabase. No pongas `ADMIN_USUARIO` ni
+`ADMIN_PASSWORD` en el `.env` del edge — ningún código suyo las usa, y el
+informe de postura del arranque te avisará si siguen ahí.
+
+> Si tu instalación todavía usa `admin123`, **cámbiala ya**: está publicada en
+> el historial de este repositorio.
 
 ## Licencia
 

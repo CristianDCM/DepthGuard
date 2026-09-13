@@ -188,9 +188,42 @@ PERMITIR_REENROLAMIENTO = _env.get("PERMITIR_REENROLAMIENTO", "false").lower() =
 # Ver backend/autorizacion_registro.py para el formato del mensaje firmado.
 REGISTRO_HMAC_SECRET = _env.get("REGISTRO_HMAC_SECRET", "")
 
-# === ADMIN (seed inicial) ===
-ADMIN_USUARIO = _env.get("ADMIN_USUARIO", "admin")
-ADMIN_PASSWORD = _env.get("ADMIN_PASSWORD", "admin123")
+# === ADMIN ===
+#
+# AQUI NO HAY CREDENCIALES DE ADMINISTRADOR, A PROPOSITO.
+#
+# Habia ADMIN_USUARIO / ADMIN_PASSWORD con los valores por defecto
+# admin / admin123. Tres problemas a la vez:
+#   1. Esa contrasena estaba publicada en el README de un repositorio publico,
+#      asi que no era un valor por defecto: era una credencial conocida.
+#   2. Si faltaba el .env, settings.py caia a ella en silencio.
+#   3. Ningun codigo del edge las usaba. La autenticacion de administradores
+#      vive en el frontend / Supabase, no aqui.
+#
+# El edge es un nodo de camara: no debe guardar credenciales de admin, igual
+# que no debe llevar la service_role key. La tabla `admin` esta en
+# TABLAS_PROHIBIDAS (backend/privilegios.py) precisamente por eso.
+#
+# Si tu .env todavia las tiene, el informe de postura de seguridad del
+# arranque te lo dira (backend/postura_seguridad.py).
+
+
+# === MODO PRODUCCION ===
+#
+# Con true, cualquier hallazgo CRITICO o ALTO del informe de postura ABORTA el
+# arranque en vez de imprimir un aviso que nadie lee. Ponlo en true en el
+# despliegue real: es lo que evita que el sistema siga funcionando durante
+# meses con la configuracion de desarrollo.
+MODO_PRODUCCION = _env.get("MODO_PRODUCCION", "false").lower() == "true"
+
+
+def valor_bruto(clave, defecto=""):
+    """
+    Lee una clave del .env tal cual, sin exponer el diccionario entero.
+    Lo usa el informe de postura para detectar ajustes que ya no deberian
+    estar ahi (por ejemplo ADMIN_PASSWORD).
+    """
+    return _env.get(clave, defecto)
 
 # === RUTAS ===
 BASE_DIR = _BASE_DIR

@@ -30,9 +30,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config.settings import CAPTURAS_DIR, MODO_CAMARA, SUPABASE_URL, DIAS_RETENCION
 from motor_ia.pipeline import ejecutar_pipeline
 from motor_ia.estado_registro import EstadoRegistro
-from backend.supabase_cliente import obtener_cliente, avisar_si_clave_insegura
-from backend import almacenamiento
-from backend.claves import ClaveInseguraError, ClaveAusenteError
+from backend.supabase_cliente import obtener_cliente
+from backend import postura_seguridad
+from backend.claves import elegir_clave, ClaveInseguraError, ClaveAusenteError
 from backend.supabase_sync import iniciar_sync
 from backend.heartbeat import iniciar_heartbeat, apagar_camaras
 from backend.command_listener import iniciar_command_listener
@@ -54,19 +54,35 @@ if not SUPABASE_URL:
     print("   Copia .env.example como .env y agrega tus credenciales")
     sys.exit(1)
 
-# Elegir la clave ANTES de arrancar los hilos: si la configuración es
-# insegura y está prohibida, hay que fallar aquí y no a medio funcionar.
+# --- Puerta de seguridad, ANTES de cualquier efecto ---
+# Todo esto se decide con la configuración, sin tocar la red ni el SDK: si el
+# despliegue es inseguro hay que negarse a arrancar antes de abrir la cámara,
+# conectar con Supabase o levantar ningún hilo.
+
+# 1. Qué clave se usaría (no crea el cliente todavía).
 try:
-    obtener_cliente()
+    _, _modo_clave = elegir_clave()
 except (ClaveInseguraError, ClaveAusenteError) as e:
     print(f" {e}")
     sys.exit(1)
 
-avisar_si_clave_insegura()
+# 2. Informe de postura: reúne en un solo sitio los ajustes de seguridad de
+#    C1/C3/C4/C5/C6. Con MODO_PRODUCCION=true, los hallazgos graves abortan el
+#    arranque en vez de quedarse en un aviso que nadie lee.
+_puede_arrancar, _hallazgos = postura_seguridad.verificar(modo_clave=_modo_clave)
+if not _puede_arrancar:
+    print("\n Arranque abortado por la postura de seguridad.")
+    print("   Corrige los hallazgos, o pon MODO_PRODUCCION=false si esto")
+    print("   es un entorno de desarrollo.")
+    sys.exit(1)
 
-_aviso_storage = almacenamiento.texto_aviso()
-if _aviso_storage:
-    print(_aviso_storage)
+# 3. Ya con la configuración validada, crear el cliente.
+try:
+    obtener_cliente()
+except Exception as e:
+    print(f" No se pudo inicializar el cliente de Supabase: {e}")
+    print("   Revisa SUPABASE_URL y la clave configurada en .env")
+    sys.exit(1)
 
 # Cola de eventos: Pipeline IA → Sync Supabase
 cola_eventos = queue.Queue()

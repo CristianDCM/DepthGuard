@@ -36,6 +36,7 @@ Set `MODO_CAMARA` in `.env`:
 | `backend/autorizacion_registro.py` | Authorizes enrolment commands before the edge writes biometrics |
 | `backend/almacenamiento.py` | Storage access: public vs signed URLs for capture images |
 | `supabase/rls_edge.sql` | Restricted role + RLS policies implementing that inventory |
+| `backend/postura_seguridad.py` | Startup security-posture report; `MODO_PRODUCCION` makes findings fatal |
 | `backend/supabase_sync.py` | Store-and-forward: queue → Supabase historial |
 | `backend/heartbeat.py` | Updates estado_sistema.ultimo_heartbeat every 30s |
 | `config/settings.py` | Loads `.env`, exports all config vars |
@@ -45,6 +46,24 @@ Set `MODO_CAMARA` in `.env`:
 - Requires Intel RealSense SDK if `MODO_CAMARA=realsense`
 - Requires `.env` file with `SUPABASE_URL` and `SUPABASE_SERVICE_KEY`
 - Supabase tables must be created beforehand (see DISEÑO_SISTEMA.md)
+
+## Security posture at startup
+
+Every audit fix ships with a setting, and most default to the insecure value so
+existing installs keep working. That leaves an operational risk: the repo is
+fixed while production keeps running the development configuration, because
+nobody reads one warning buried in a hundred lines of log.
+
+`backend/postura_seguridad.py` gathers all of them into one report printed at
+startup, each finding tagged with its audit id (C1, C3, C4, C5, C6), its
+severity and its remedy.
+
+| Variable | What it does |
+|----------|--------------|
+| `MODO_PRODUCCION` | `true` makes any CRITICO or ALTO finding **abort startup** instead of warning. Set it in real deployments — a system that refuses to start gets fixed today; a warning gets ignored for months |
+
+Target configuration for a real deployment is listed at the bottom of
+`.env.example`.
 
 ## Capture storage (biometric images)
 
@@ -203,8 +222,15 @@ Design notes:
 
 ## Admin
 
-- Default: `admin` / `admin123` (from `.env`)
-- Create additional admins: `python scripts/crear_admin.py`
+**No default credentials, deliberately.** This repo used to publish
+`admin` / `admin123`, which made it a known credential rather than a default,
+and `config/settings.py` fell back to it whenever `.env` was missing.
+
+Admin credentials are **not an edge concern** — authentication lives in the
+frontend / Supabase, and no edge code ever read those variables. The `admin`
+table is in `TABLAS_PROHIBIDAS` (`backend/privilegios.py`) for the same reason.
+If `ADMIN_USUARIO` / `ADMIN_PASSWORD` are still in a device's `.env`, the
+startup posture report flags it.
 
 ## Database
 
