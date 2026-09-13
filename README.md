@@ -62,8 +62,17 @@ copy .env.example .env  # Windows
 Edita `.env` y agrega tus credenciales de Supabase:
 ```
 SUPABASE_URL=https://tu-proyecto.supabase.co
-SUPABASE_SERVICE_KEY=eyJ...tu-service-role-key...
+SUPABASE_EDGE_KEY=eyJ...clave-de-dispositivo...
+SUPABASE_ANON_KEY=eyJ...clave-publica...
+PERMITIR_SERVICE_KEY=false
+CLEANUP_EN_EDGE=false
 ```
+
+> **Seguridad:** no pongas la `service_role` key en el dispositivo. Salta toda
+> la RLS, así que quien lea ese `.env` obtiene control total del proyecto,
+> incluidas todas las plantillas biométricas. Genera una clave de dispositivo
+> restringida con [`supabase/rls_edge.sql`](supabase/rls_edge.sql). El sistema
+> aún arranca con `service_role` por compatibilidad, pero avisa en cada inicio.
 
 ## Instalación rápida (Windows)
 
@@ -115,8 +124,12 @@ DepthGuard/
 │   ├── deteccion/             # Face Mesh (MediaPipe)
 │   ├── antispoofing/          # Verificación 3D + liveness 2D (parpadeo)
 │   └── reconocimiento/        # Embeddings faciales
+├── supabase/
+│   └── rls_edge.sql           # Rol restringido + políticas RLS del edge
 ├── backend/
 │   ├── supabase_cliente.py    # Cliente Supabase (singleton)
+│   ├── claves.py              # Política de selección de clave
+│   ├── privilegios.py         # Inventario de privilegios del edge
 │   ├── supabase_sync.py       # Store-and-Forward → historial
 │   └── heartbeat.py           # Heartbeat cada 30s
 ├── scripts/

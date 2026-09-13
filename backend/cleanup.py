@@ -15,7 +15,7 @@ import datetime
 import traceback
 
 from backend.supabase_cliente import obtener_cliente
-from config.settings import DIAS_RETENCION
+from config.settings import DIAS_RETENCION, CLEANUP_EN_EDGE
 
 
 def _extraer_nombre_archivo(foto_url: str) -> str | None:
@@ -114,6 +114,15 @@ def iniciar_cleanup(intervalo_horas: int = 24):
     Hilo daemon que ejecuta limpieza periódica.
     Se espera 60 segundos al arrancar para no interferir con la inicialización del sistema.
     """
+    if not CLEANUP_EN_EDGE:
+        # Borrar el histórico es un privilegio que no debería tener el
+        # dispositivo: un edge comprometido podría borrar el rastro de
+        # auditoría. Con clave restringida la retención la hace pg_cron en la
+        # base de datos (ver supabase/rls_edge.sql).
+        print(" Cleanup: desactivado en el edge (CLEANUP_EN_EDGE=false)")
+        print("    La retención debe estar programada en la base de datos.")
+        return
+
     print(" Cleanup: iniciando (primera ejecución en 60s)")
 
     # Esperar al arranque completo del sistema

@@ -31,7 +31,8 @@ except ImportError:
     WEBRTC_DISPONIBLE = False
     logging.warning("  aiortc no instalado. WebRTC deshabilitado. Usando solo snapshots JPEG.")
 
-from config.settings import TURN_URL, TURN_USERNAME, TURN_CREDENTIAL, SUPABASE_URL, SUPABASE_SERVICE_KEY
+from config.settings import TURN_URL, TURN_USERNAME, TURN_CREDENTIAL, SUPABASE_URL
+from backend.claves import clave_realtime
 
 # ──────────────────────────────────────────────
 # ICE Servers — STUN gratuito de Google + TURN Metered
@@ -205,7 +206,11 @@ class WebRTCManager:
         ofertas SDP y candidatos ICE del frontend.
         """
         from supabase import create_async_client
-        supabase = await create_async_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+        # Clave SIN privilegios: este canal es Broadcast puro (SDP + ICE) y no
+        # lee ni escribe ninguna tabla. Antes usaba la service_role key, que
+        # salta toda la RLS, para un canal que no necesita tocar nada.
+        supabase = await create_async_client(SUPABASE_URL, clave_realtime())
 
         canal = supabase.channel(self._canal_nombre)
 

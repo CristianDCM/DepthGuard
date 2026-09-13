@@ -30,7 +30,10 @@ Set `MODO_CAMARA` in `.env`:
 | `motor_ia/tracking.py` | `PersonaTrack` (incl. temporal voting + liveness state) + IoU association |
 | `motor_ia/antispoofing/liveness.py` | 2D liveness: blink (EAR) + screen-texture metrics |
 | `motor_ia/camara/factory.py` | Camera factory based on MODO_CAMARA |
-| `backend/supabase_cliente.py` | Supabase client singleton (service_role key) |
+| `backend/supabase_cliente.py` | Supabase client singleton (restricted device key) |
+| `backend/claves.py` | Key-selection policy: restricted key wins, service_role fails closed |
+| `backend/privilegios.py` | Authoritative inventory of every privileged op the edge performs |
+| `supabase/rls_edge.sql` | Restricted role + RLS policies implementing that inventory |
 | `backend/supabase_sync.py` | Store-and-forward: queue → Supabase historial |
 | `backend/heartbeat.py` | Updates estado_sistema.ultimo_heartbeat every 30s |
 | `config/settings.py` | Loads `.env`, exports all config vars |
@@ -40,6 +43,29 @@ Set `MODO_CAMARA` in `.env`:
 - Requires Intel RealSense SDK if `MODO_CAMARA=realsense`
 - Requires `.env` file with `SUPABASE_URL` and `SUPABASE_SERVICE_KEY`
 - Supabase tables must be created beforehand (see DISEÑO_SISTEMA.md)
+
+## Supabase keys / least privilege
+
+**Do not put the service_role key on the device.** It bypasses ALL RLS by
+design: anyone who reads that machine's `.env` gets full control of the
+project — every user, every biometric template, the whole history, unrestricted
+writes. Nothing the edge does needs that (see `backend/privilegios.py`).
+
+| Variable | What it does |
+|----------|--------------|
+| `SUPABASE_EDGE_KEY` | The device key, restricted by RLS. **Use this.** Generate it with `supabase/rls_edge.sql` |
+| `SUPABASE_ANON_KEY` | Public key, used for the WebRTC signalling channel (Broadcast only — it touches no table) |
+| `SUPABASE_SERVICE_KEY` | Legacy. Only used when no edge key is set, and startup warns loudly |
+| `PERMITIR_SERVICE_KEY` | Set `false` in production: the edge then refuses to start on service_role instead of running with a master key |
+| `CLEANUP_EN_EDGE` | Set `false` with a restricted key. Deleting history is a privilege the device should not hold — a compromised edge could erase the audit trail. Move retention to pg_cron (see the SQL file) |
+
+`tests/test_privilegios.py` scans the code for `.table()` / `.storage` calls
+and fails if any is not declared in `backend/privilegios.py`. Adding a new
+privileged call therefore forces a look at the RLS policies, instead of the
+policies silently falling behind what the code asks for.
+
+Migration is config-only once the SQL is applied: set `SUPABASE_EDGE_KEY`,
+`PERMITIR_SERVICE_KEY=false`, `CLEANUP_EN_EDGE=false`.
 
 ## Liveness / anti-spoofing
 

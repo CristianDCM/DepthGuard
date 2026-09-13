@@ -30,6 +30,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from config.settings import CAPTURAS_DIR, MODO_CAMARA, SUPABASE_URL, DIAS_RETENCION
 from motor_ia.pipeline import ejecutar_pipeline
 from motor_ia.estado_registro import EstadoRegistro
+from backend.supabase_cliente import obtener_cliente, avisar_si_clave_insegura
+from backend.claves import ClaveInseguraError, ClaveAusenteError
 from backend.supabase_sync import iniciar_sync
 from backend.heartbeat import iniciar_heartbeat, apagar_camaras
 from backend.command_listener import iniciar_command_listener
@@ -50,6 +52,16 @@ if not SUPABASE_URL:
     print(" SUPABASE_URL no configurada en .env")
     print("   Copia .env.example como .env y agrega tus credenciales")
     sys.exit(1)
+
+# Elegir la clave ANTES de arrancar los hilos: si la configuración es
+# insegura y está prohibida, hay que fallar aquí y no a medio funcionar.
+try:
+    obtener_cliente()
+except (ClaveInseguraError, ClaveAusenteError) as e:
+    print(f" {e}")
+    sys.exit(1)
+
+avisar_si_clave_insegura()
 
 # Cola de eventos: Pipeline IA → Sync Supabase
 cola_eventos = queue.Queue()

@@ -38,7 +38,32 @@ MODO_CAMARA = _env.get("MODO_CAMARA", "simulada")
 
 # === SUPABASE ===
 SUPABASE_URL = _env.get("SUPABASE_URL", "")
+
+# Clave de DISPOSITIVO, restringida por RLS. Es la que debe usarse.
+# Se genera una sola vez siguiendo supabase/rls_edge.sql y solo puede hacer
+# lo que declara backend/privilegios.py.
+SUPABASE_EDGE_KEY = _env.get("SUPABASE_EDGE_KEY", "")
+
+# Clave publica (anon). Sin privilegios: sirve para la senalizacion WebRTC,
+# que es un canal Broadcast y no necesita tocar ninguna tabla.
+SUPABASE_ANON_KEY = _env.get("SUPABASE_ANON_KEY", "")
+
+# LEGADO. La service_role key SALTA TODA LA RLS por diseno: quien lea el .env
+# de esta maquina obtiene control total del proyecto, incluidas todas las
+# plantillas biometricas. Solo se usa si no hay SUPABASE_EDGE_KEY, y el
+# arranque lo avisa. Migra en cuanto puedas (supabase/rls_edge.sql).
 SUPABASE_SERVICE_KEY = _env.get("SUPABASE_SERVICE_KEY", "")
+
+# Poner a false para NEGARSE a arrancar con service_role. Es lo correcto en
+# despliegue real; el default es true para no romper instalaciones que aun no
+# han migrado.
+PERMITIR_SERVICE_KEY = _env.get("PERMITIR_SERVICE_KEY", "true").lower() == "true"
+
+# Borrado del historico desde el dispositivo. Un edge comprometido con este
+# permiso puede borrar el rastro de auditoria, asi que con clave restringida
+# esto debe ser false y la retencion la hace pg_cron en la base de datos
+# (ver supabase/rls_edge.sql).
+CLEANUP_EN_EDGE = _env.get("CLEANUP_EN_EDGE", "true").lower() == "true"
 
 # === ANTI-SPOOFING ===
 UMBRAL_VARIANZA = float(_env.get("UMBRAL_VARIANZA", "0.7"))
