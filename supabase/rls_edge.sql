@@ -323,18 +323,22 @@ create policy edge_reemplaza_preview on storage.objects
 -- ---------------------------------------------------------------------------
 -- 6. Retencion en la base de datos, no en el dispositivo
 -- ---------------------------------------------------------------------------
--- Sustituye al hilo de cleanup del edge. Asi el dispositivo no necesita
--- permiso de borrado sobre el rastro de auditoria.
--- Ajusta el intervalo a tu DIAS_RETENCION.
-
--- create extension if not exists pg_cron;
+-- YA APLICADO. Ver supabase/retencion.sql, que es el estado real en
+-- produccion, y supabase/functions/retencion/index.ts.
 --
--- select cron.schedule(
---   'depthguard-retencion',
---   '0 3 * * *',                       -- cada dia a las 03:00 UTC
---   $$ delete from public.historial
---      where timestamp < now() - interval '30 days' $$
--- );
+-- Sustituye al hilo de cleanup del edge, que no podia funcionar: sin lectura
+-- sobre historial la consulta que busca los registros caducados falla con
+-- 42501 antes de borrar nada. Por eso CLEANUP_EN_EDGE va en false.
 --
--- Las fotos huerfanas del Storage se limpian aparte; si no lo haces, el bucket
--- crece indefinidamente aunque el historial se pode.
+-- Resumen de lo que hay montado:
+--   * public.fotos_huerfanas(dias, limite)  — localiza objetos sin fila.
+--   * public.retencion_token_valido(token)  — autoriza la invocacion.
+--   * Edge Function "retencion"             — borra FOTO primero, FILA despues.
+--   * pg_cron 'depthguard-retencion'        — 07:00 UTC cada dia.
+--
+-- El borrado NO puede hacerse con un delete aqui: las fotos solo se borran de
+-- verdad por la Storage API. Un delete sobre storage.objects deja el fichero
+-- fisico y se sigue facturando, y la propia base de datos lo rechaza con
+-- "Direct deletion from storage tables is not allowed". Si solo se podaran las
+-- filas de historial, se perderia el nombre de la foto y el bucket creceria
+-- para siempre con huerfanos inalcanzables: de ahi el orden foto-primero.
