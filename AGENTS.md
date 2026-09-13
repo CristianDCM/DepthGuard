@@ -37,6 +37,8 @@ Set `MODO_CAMARA` in `.env`:
 | `backend/almacenamiento.py` | Storage access: public vs signed URLs for capture images |
 | `supabase/rls_edge.sql` | Restricted role + RLS policies implementing that inventory |
 | `backend/postura_seguridad.py` | Startup security-posture report; `MODO_PRODUCCION` makes findings fatal |
+| `supabase/rls_correccion_urgente.sql` | Fixes policies opened to `public` — apply first |
+| `supabase/rls_realtime.sql` | Authorization for the WebRTC signalling channel |
 | `backend/supabase_sync.py` | Store-and-forward: queue → Supabase historial |
 | `backend/heartbeat.py` | Updates estado_sistema.ultimo_heartbeat every 30s |
 | `config/settings.py` | Loads `.env`, exports all config vars |
@@ -46,6 +48,38 @@ Set `MODO_CAMARA` in `.env`:
 - Requires Intel RealSense SDK if `MODO_CAMARA=realsense`
 - Requires `.env` file with `SUPABASE_URL` and `SUPABASE_SERVICE_KEY`
 - Supabase tables must be created beforehand (see DISEÑO_SISTEMA.md)
+
+## WebRTC signalling authorization
+
+Signalling runs over a Supabase Realtime Broadcast channel named
+`webrtc-signaling-{camera_id}`, and `camera_id` is a fixed value in the code
+(`entrada_principal` / `entrada_secundaria`) — a predictable name. The edge
+answered **any** offer that arrived, so anyone who could subscribe got a live
+camera feed.
+
+**This cannot be fixed edge-side.** On a Broadcast channel the edge cannot
+authenticate its peer — not even by asking for a token, because a token sent
+over broadcast is delivered to *every* subscriber, leaking the very credential
+you wanted to check. Authorization has to be enforced by the transport.
+
+With `WEBRTC_CANAL_PRIVADO=true` the channel is declared **private**, so
+Supabase evaluates RLS on `realtime.messages` before letting anyone join or
+publish (`supabase/rls_realtime.sql`).
+
+| Variable | What it does |
+|----------|--------------|
+| `WEBRTC_CANAL_PRIVADO` | `true` makes signalling a private, authorized channel |
+| `WEBRTC_MAX_CONEXIONES` | Cap on concurrent peer connections. Each holds its own encoder; without a cap, chaining offers with fresh session ids exhausts CPU and memory even on a private channel |
+
+**Deliberate trade-off:** a private channel needs an identity that satisfies
+the RLS, and the anon key does not. So signalling switches from the anon key
+to the edge key. That is worth it — "nobody unauthorized can even join" beats
+"whoever joins holds fewer table grants" — and the edge key stays bounded by
+its own RLS.
+
+**Order:** apply the SQL → change the frontend (`setAuth()` +
+`{ config: { private: true } }`) → set `WEBRTC_CANAL_PRIVADO=true`. Doing the
+first and last without the frontend leaves the panel without video.
 
 ## Security posture at startup
 

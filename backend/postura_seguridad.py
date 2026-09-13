@@ -23,6 +23,7 @@ from config.settings import (
     MODO_PRODUCCION, MODO_CAMARA, REQUERIR_CAMARA_3D,
     SUPABASE_ANON_KEY, CLEANUP_EN_EDGE, STORAGE_PRIVADO,
     PERMITIR_REENROLAMIENTO, REGISTRO_HMAC_SECRET,
+    WEBRTC_CANAL_PRIVADO,
     valor_bruto,
 )
 
@@ -67,6 +68,7 @@ def evaluar(modo_clave=None, **kwargs):
         "hmac_secret": REGISTRO_HMAC_SECRET,
         "admin_password": valor_bruto("ADMIN_PASSWORD"),
         "admin_usuario": valor_bruto("ADMIN_USUARIO"),
+        "canal_privado": WEBRTC_CANAL_PRIVADO,
     }
     cfg.update(kwargs)
 
@@ -137,6 +139,17 @@ def evaluar(modo_clave=None, **kwargs):
             "El liveness 2D (parpadeo) detiene una foto impresa pero NO un "
             "video en bucle. Usa MODO_CAMARA=realsense y pon "
             "REQUERIR_CAMARA_3D=true.",
+        ))
+
+    # --- C2: senalizacion WebRTC ---
+    if not cfg["canal_privado"]:
+        hallazgos.append(Hallazgo(
+            "C2", ALTO,
+            "El canal de senalizacion WebRTC es publico",
+            "El nombre del canal es predecible y el edge responde a cualquier "
+            "oferta: quien se suscriba obtiene video en vivo. Aplica "
+            "supabase/rls_realtime.sql, pon private:true en el frontend y "
+            "activa WEBRTC_CANAL_PRIVADO=true.",
         ))
 
     # --- C4: autorizacion de enrolamiento ---

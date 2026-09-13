@@ -129,7 +129,9 @@ DepthGuard/
 │   ├── antispoofing/          # Verificación 3D + liveness 2D (parpadeo)
 │   └── reconocimiento/        # Embeddings faciales
 ├── supabase/
-│   └── rls_edge.sql           # Rol restringido + políticas RLS del edge
+│   ├── rls_correccion_urgente.sql # Corrige políticas abiertas a `public`
+│   ├── rls_edge.sql           # Rol restringido + políticas RLS del edge
+│   └── rls_realtime.sql       # Autorización del canal de señalización
 ├── backend/
 │   ├── supabase_cliente.py    # Cliente Supabase (singleton)
 │   ├── claves.py              # Política de selección de clave

@@ -14,6 +14,7 @@ todas las plantillas biometricas.
 from config.settings import (
     SUPABASE_EDGE_KEY, SUPABASE_ANON_KEY,
     SUPABASE_SERVICE_KEY, PERMITIR_SERVICE_KEY,
+    WEBRTC_CANAL_PRIVADO,
 )
 
 # Modos posibles
@@ -71,18 +72,28 @@ def elegir_clave(edge_key=None, service_key=None, permitir_service=None):
     )
 
 
-def clave_realtime(anon_key=None, **kwargs):
+def clave_realtime(anon_key=None, canal_privado=None, **kwargs):
     """
     Clave para la senalizacion WebRTC.
 
-    Ese canal es Broadcast puro: intercambia SDP e ICE y no lee ni escribe
-    ninguna tabla, asi que no hay motivo para darle una clave privilegiada.
-    Se prefiere la anon; si no esta configurada se cae a la de datos para no
-    romper el streaming, pero conviene definir SUPABASE_ANON_KEY.
+    Con canal PUBLICO: el canal es Broadcast puro (SDP e ICE, ninguna tabla),
+    asi que la clave anon —sin privilegios— es exactamente lo que toca.
+
+    Con canal PRIVADO: Supabase evalua la RLS de realtime.messages antes de
+    dejar entrar, y la clave anon no pasa una politica escrita para identidades
+    autenticadas. Ahi se usa la clave de datos del edge.
+
+    Es un intercambio deliberado: la senalizacion pasa a llevar una clave algo
+    menos limitada, a cambio de que NADIE no autorizado pueda siquiera unirse
+    al canal. Compensa, y la clave del edge sigue acotada por su propia RLS.
     """
+    canal_privado = (WEBRTC_CANAL_PRIVADO if canal_privado is None
+                     else canal_privado)
     anon_key = SUPABASE_ANON_KEY if anon_key is None else anon_key
-    if anon_key:
+
+    if not canal_privado and anon_key:
         return anon_key
+
     clave, _ = elegir_clave(**kwargs)
     return clave
 

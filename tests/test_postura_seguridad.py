@@ -29,6 +29,7 @@ SEGURA = {
     "hmac_secret": "SECRETO",
     "admin_password": "",
     "admin_usuario": "",
+    "canal_privado": True,
 }
 
 
@@ -129,6 +130,22 @@ class TestOtrosHallazgos(unittest.TestCase):
     def test_sin_firma_de_comandos(self):
         h = evaluar(modo_clave="edge", **{**SEGURA, "hmac_secret": ""})
         self.assertTrue(_por_id(h, "C4"))
+
+
+class TestSenalizacionWebRTC(unittest.TestCase):
+    """C2: quien puede pedir video en vivo."""
+
+    def test_canal_publico_es_hallazgo_alto(self):
+        h = evaluar(modo_clave="edge", **{**SEGURA, "canal_privado": False})
+        self.assertEqual(_por_id(h, "C2")[0].severidad, ALTO)
+
+    def test_canal_privado_no_es_hallazgo(self):
+        self.assertNotIn("C2", _ids(evaluar(modo_clave="edge", **SEGURA)))
+
+    def test_bloquea_el_arranque_en_produccion(self):
+        puede, _ = verificar(modo_clave="edge", modo_produccion=True,
+                             **{**SEGURA, "canal_privado": False})
+        self.assertFalse(puede)
 
 
 class TestModoProduccion(unittest.TestCase):

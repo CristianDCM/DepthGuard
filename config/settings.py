@@ -229,6 +229,30 @@ def valor_bruto(clave, defecto=""):
 BASE_DIR = _BASE_DIR
 CAPTURAS_DIR = os.path.join(BASE_DIR, "capturas")
 
+# === SENALIZACION WEBRTC (hallazgo C2) ===
+#
+# El canal de senalizacion es un Broadcast de Supabase Realtime con nombre
+# predecible (webrtc-signaling-entrada_principal). Sin autorizacion, cualquiera
+# que se suscriba puede mandar una oferta SDP y recibir video en vivo de la
+# camara: el edge respondia a toda oferta que llegara.
+#
+# true = canal PRIVADO (Realtime Authorization). Supabase comprueba la RLS de
+# realtime.messages antes de dejar entrar o publicar en el canal, asi que la
+# autorizacion se aplica en el transporte y no depende de que el edge sepa
+# distinguir a quien le habla.
+#
+# Requiere DOS cosas antes de activarlo:
+#   1. Aplicar supabase/rls_realtime.sql (politicas del canal).
+#   2. En el frontend: supabase.realtime.setAuth() y crear el canal con
+#      { config: { private: true } }.
+# Sin (2), el panel deja de recibir video.
+WEBRTC_CANAL_PRIVADO = _env.get("WEBRTC_CANAL_PRIVADO", "false").lower() == "true"
+
+# Tope de conexiones WebRTC simultaneas. Cada una mantiene su propio
+# RTCPeerConnection y su codificador; sin tope, abrir ofertas en bucle agota
+# la memoria y la CPU del nodo.
+WEBRTC_MAX_CONEXIONES = int(_env.get("WEBRTC_MAX_CONEXIONES", "3"))
+
 # === WEBRTC / TURN (Metered) ===
 TURN_URL        = _env.get("TURN_URL", "turn:global.relay.metered.ca:80")
 TURN_USERNAME   = _env.get("TURN_USERNAME", "")
