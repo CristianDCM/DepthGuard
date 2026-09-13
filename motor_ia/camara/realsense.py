@@ -15,6 +15,12 @@ class CamaraRealSense:
         self.align = None
 
     def conectar(self):
+        # Nota: el color sigue a 640x480, no se toca con CAMARA_ANCHO.
+        # A diferencia de una webcam, aqui la resolucion de color no es libre:
+        # el stream de profundidad se alinea al de color (rs.align), asi que
+        # cambiar uno obliga a revisar el otro y los modos validos del D435i
+        # son un conjunto cerrado. Subirlo es una mejora pendiente aparte,
+        # no un efecto secundario de la configuracion de la webcam.
         self.pipeline = rs.pipeline()
         config = rs.config()
         config.enable_stream(rs.stream.color, 640, 480, rs.format.bgr8, 30)

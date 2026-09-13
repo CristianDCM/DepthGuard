@@ -36,6 +36,31 @@ _env = _cargar_env()
 # === CÁMARA ===
 MODO_CAMARA = _env.get("MODO_CAMARA", "simulada")
 
+# Resolucion NATIVA que se le pide a la webcam (modo simulada).
+#
+# No es la resolucion a la que se detecta ni a la que se transmite: el
+# pipeline reduce cada frame a ANCHO_DETECCION (640) para detectar, dibujar
+# el preview y enviarlo por WebRTC. El frame nativo solo lo usa el recorte
+# del que sale el embedding, y nunca sale de la RAM.
+#
+# El valor por defecto es 1280x960 a proposito, no 1280x720: es exactamente
+# 2x 640x480, asi que el frame reducido queda identico al de antes (mismo
+# encuadre, mismo campo de vision) y los umbrales de calidad y de liveness,
+# que se evaluan sobre ese frame reducido, siguen significando lo mismo.
+# Lo unico que cambia es que el embedding recibe pixeles reales en vez de
+# un recorte pequeno interpolado por dlib hasta su chip de 150x150.
+#
+# Con 16:9 (1280x720) se pierde campo vertical y las caras quedan mas
+# pequenas en el frame de deteccion: es una alternativa valida si la camara
+# no ofrece 4:3, pero obliga a revisar los umbrales de validacion_calidad.
+CAMARA_ANCHO = int(_env.get("CAMARA_ANCHO", "1280"))
+CAMARA_ALTO = int(_env.get("CAMARA_ALTO", "960"))
+
+# FPS que se le piden a la camara. El pipeline se limita aparte a TARGET_FPS;
+# este valor es el que se negocia con el driver, y sirve sobre todo para
+# detectar que la camara NO concedio lo pedido (ver camara/simulada.py).
+CAMARA_FPS = int(_env.get("CAMARA_FPS", "30"))
+
 # === SUPABASE ===
 SUPABASE_URL = _env.get("SUPABASE_URL", "")
 
