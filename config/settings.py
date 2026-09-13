@@ -199,6 +199,68 @@ VOTOS_REQUERIDOS = int(_env.get("VOTOS_REQUERIDOS", "3"))
 # num_jitters de dlib al generar embeddings. En registro conviene subirlo
 # (promedia varias transformaciones -> plantilla mas estable) porque ocurre
 # una sola vez; en reconocimiento se queda en 1 por coste de CPU.
+# === MOTOR DE EMBEDDINGS ===
+#
+# "dlib" = face_recognition, 128 dimensiones. Lo historico.
+# "onnx" = MobileFaceNet entrenado con ArcFace, 512 dimensiones.
+#
+# Medido en el equipo del edge (16 nucleos, Windows):
+#     dlib            217.5 ms por rostro
+#     onnx  1 hilo      9.7 ms      22x
+#     onnx 16 hilos     3.2 ms      69x
+# Y onnx acepta lote: 5 rostros del mismo frame en 26 ms, contra ~1090 ms de
+# dlib uno detras de otro. Gasta ademas menos memoria (+32 MB de sesion frente
+# a +92 MB de los modelos de dlib).
+#
+# El defecto sigue siendo dlib A PROPOSITO: los embeddings de los dos motores
+# NO son compatibles (128D contra 512D, y otra geometria de alineacion), asi
+# que cambiar obliga a volver a registrar a TODOS los usuarios. Cambiarlo por
+# sorpresa dejaria el sistema sin reconocer a nadie.
+#
+# Para cambiar:
+#   1. python scripts/descargar_modelo.py
+#   2. MOTOR_EMBEDDING=onnx en .env
+#   3. volver a registrar a los usuarios
+#   4. python scripts/calibrar_umbral.py  (ajustar TOLERANCIA_FACIAL_ONNX)
+MOTOR_EMBEDDING = _env.get("MOTOR_EMBEDDING", "dlib").strip().lower()
+
+# Un valor mal escrito ("ONNX2", "arcface") caeria en dlib sin decir nada, y
+# quien lo escribio creeria estar usando el motor rapido. Mejor avisar: el
+# sistema sigue arrancando con dlib, que es seguro, pero se entera.
+_MOTORES = ("dlib", "onnx")
+if MOTOR_EMBEDDING not in _MOTORES:
+    print(f" MOTOR_EMBEDDING='{MOTOR_EMBEDDING}' no es valido "
+          f"(opciones: {', '.join(_MOTORES)}).")
+    print("    Se usara dlib.")
+    MOTOR_EMBEDDING = "dlib"
+
+RUTA_MODELO_ONNX = _env.get(
+    "RUTA_MODELO_ONNX",
+    # _BASE_DIR y no BASE_DIR: el alias publico se define al final del fichero,
+    # despues de esta linea.
+    os.path.join(_BASE_DIR, "scripts", "_modelos", "w600k_mbf.onnx")
+)
+
+# Hilos internos de onnxruntime. 0 = que decida la libreria (usa los nucleos
+# disponibles). Ponerlo a 1 deja mas CPU libre para el resto del pipeline a
+# cambio de unos milisegundos mas por rostro.
+ONNX_HILOS = int(_env.get("ONNX_HILOS", "0"))
+
+# --- Umbrales del motor ONNX ---
+#
+# Este motor devuelve vectores de norma 1, asi que la distancia euclidea entre
+# dos embeddings esta acotada en [0, 2] y se relaciona con la similitud coseno
+# por  euclidea = sqrt(2 * (1 - coseno)).  Por eso el matching no cambia: mide
+# la misma distancia euclidea, solo con otros umbrales.
+#
+# 1.095 equivale a exigir coseno >= 0.40. Es una eleccion razonable para
+# control de acceso (prioriza no dejar pasar a un desconocido sobre no molestar
+# al usuario legitimo), pero NO esta calibrada con rostros reales. Usa
+# scripts/calibrar_umbral.py con los usuarios ya registrados y ajustala.
+TOLERANCIA_FACIAL_ONNX = float(_env.get("TOLERANCIA_FACIAL_ONNX", "1.095"))
+MARGEN_IDENTIDAD_ONNX = float(_env.get("MARGEN_IDENTIDAD_ONNX", "0.10"))
+ESCALA_CONFIANZA_ONNX = float(_env.get("ESCALA_CONFIANZA_ONNX", "0.12"))
+
 JITTERS_REGISTRO = int(_env.get("JITTERS_REGISTRO", "3"))
 JITTERS_RECONOCIMIENTO = int(_env.get("JITTERS_RECONOCIMIENTO", "1"))
 

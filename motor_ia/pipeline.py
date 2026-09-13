@@ -66,22 +66,30 @@ ANCHO_DETECCION = 640
 REINTENTO_GATE = 0.3
 
 
-def _preparar_crop(imagen_rgb, bbox, color_full, escala_full, rgb_full):
+def _preparar_crop(imagen_rgb, bbox, color_full, escala_full, rgb_full,
+                   puntos=None):
     """
     Elige de qué imagen recortar el rostro para el embedding.
 
-    Retorna (imagen, bbox, rgb_full). `rgb_full` es una caché por frame:
-    convertir el frame nativo a RGB solo merece la pena si de verdad se va
-    a generar un embedding, y solo una vez aunque haya varias personas.
+    Retorna (imagen, bbox, rgb_full, puntos). `rgb_full` es una caché por
+    frame: convertir el frame nativo a RGB solo merece la pena si de verdad se
+    va a generar un embedding, y solo una vez aunque haya varias personas.
+
+    `puntos` se reproyecta junto con el bbox. El motor ONNX alinea el rostro a
+    partir de 5 landmarks, y los landmarks vienen en coordenadas del frame
+    REDUCIDO: usarlos sin escalar contra el frame nativo alinearía sobre la
+    esquina superior izquierda de la imagen en vez de sobre la cara.
     """
     if escala_full <= 1.0:
-        return imagen_rgb, bbox, rgb_full
+        return imagen_rgb, bbox, rgb_full, puntos
 
     if rgb_full is None:
         rgb_full = cv2.cvtColor(color_full, cv2.COLOR_BGR2RGB)
 
     alto_f, ancho_f = rgb_full.shape[:2]
-    return rgb_full, escalar_bbox(bbox, escala_full, ancho_f, alto_f), rgb_full
+    puntos_full = None if puntos is None else puntos * escala_full
+    return (rgb_full, escalar_bbox(bbox, escala_full, ancho_f, alto_f),
+            rgb_full, puntos_full)
 
 
 def _guardar_foto(imagen, prefijo):
@@ -334,11 +342,14 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                                 # frame nativo y con mas jitters: ocurre una
                                 # sola vez por angulo, asi que la calidad
                                 # importa mas que el coste.
-                                img_emb, bbox_emb, rgb_full = _preparar_crop(
-                                    imagen_rgb, bbox, color_full, escala_full, rgb_full
+                                img_emb, bbox_emb, rgb_full, puntos_emb = _preparar_crop(
+                                    imagen_rgb, bbox, color_full, escala_full,
+                                    rgb_full, rostro.puntos
                                 )
                                 embedding = reconocedor.generar_embedding(
-                                    img_emb, bbox_emb, num_jitters=JITTERS_REGISTRO
+                                    img_emb, bbox_emb,
+                                    num_jitters=JITTERS_REGISTRO,
+                                    puntos=puntos_emb
                                 )
                                 if embedding is not None:
                                     modo_registro.registrar_captura(embedding, angulo_solicitado)
@@ -458,11 +469,14 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                     else:
                         track.motivo_gate = ""
 
-                        img_emb, bbox_emb, rgb_full = _preparar_crop(
-                            imagen_rgb, bbox, color_full, escala_full, rgb_full
+                        img_emb, bbox_emb, rgb_full, puntos_emb = _preparar_crop(
+                            imagen_rgb, bbox, color_full, escala_full, rgb_full,
+                            rostro.puntos
                         )
                         embeddings_restantes -= 1
-                        embedding = reconocedor.generar_embedding(img_emb, bbox_emb)
+                        embedding = reconocedor.generar_embedding(
+                            img_emb, bbox_emb, puntos=puntos_emb
+                        )
 
                         if embedding is not None:
                             nombre, confianza, usuario_id = reconocedor.buscar(

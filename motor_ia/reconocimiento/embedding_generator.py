@@ -25,8 +25,29 @@ import face_recognition
 from config.settings import (
     TOLERANCIA_FACIAL, MARGEN_IDENTIDAD, ESCALA_CONFIANZA,
     PENALIZACION_POSE, JITTERS_RECONOCIMIENTO,
+    MOTOR_EMBEDDING, RUTA_MODELO_ONNX, ONNX_HILOS,
+    TOLERANCIA_FACIAL_ONNX, MARGEN_IDENTIDAD_ONNX, ESCALA_CONFIANZA_ONNX,
 )
 from motor_ia.estado_registro import ANGULOS_REGISTRO
+
+
+# Los dos motores miden la MISMA distancia euclidea, pero sobre espacios
+# distintos: dlib da vectores de 128 dimensiones sin normalizar, y el motor ONNX
+# da 512 normalizados a norma 1. Los umbrales no son intercambiables, asi que se
+# resuelven una vez aqui segun el motor activo en vez de repartir condicionales
+# por el codigo de matching.
+_USA_ONNX = MOTOR_EMBEDDING == "onnx"
+
+if _USA_ONNX:
+    _TOLERANCIA = TOLERANCIA_FACIAL_ONNX
+    _MARGEN = MARGEN_IDENTIDAD_ONNX
+    _ESCALA = ESCALA_CONFIANZA_ONNX
+    _DIMENSIONES = 512
+else:
+    _TOLERANCIA = TOLERANCIA_FACIAL
+    _MARGEN = MARGEN_IDENTIDAD
+    _ESCALA = ESCALA_CONFIANZA
+    _DIMENSIONES = 128
 
 
 def calibrar_confianza(distancia, umbral=None, escala=None):
@@ -36,8 +57,8 @@ def calibrar_confianza(distancia, umbral=None, escala=None):
 
     Sustituye a `1 - distancia`, que no estaba en ninguna escala util.
     """
-    umbral = TOLERANCIA_FACIAL if umbral is None else umbral
-    escala = ESCALA_CONFIANZA if escala is None else escala
+    umbral = _TOLERANCIA if umbral is None else umbral
+    escala = _ESCALA if escala is None else escala
 
     # Acotar el exponente para que no desborde con distancias grandes
     exponente = max(-60.0, min(60.0, (float(distancia) - umbral) / escala))
@@ -52,7 +73,7 @@ class ReconocedorFacial:
         self.cache = []
 
         # Representacion vectorizada de la cache
-        self._matriz = np.zeros((0, 128), dtype=np.float64)   # (M, 128)
+        self._matriz = np.zeros((0, _DIMENSIONES), dtype=np.float64)  # (M, D)
         self._angulos = np.zeros(0, dtype=object)             # (M,) angulo por plantilla
         self._idx_identidad = np.zeros(0, dtype=np.int64)     # (M,) -> indice de identidad
         self._identidades = []                               # [(usuario_id, nombre), ...]
@@ -60,6 +81,19 @@ class ReconocedorFacial:
         # CLAHE: ecualización adaptativa de histograma
         # Normaliza iluminación desigual (sombras, contraluz, etc.)
         self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+
+        # Motor ONNX: se crea al primer uso y no en el constructor, para que
+        # importar este modulo no exija tener el modelo descargado ni
+        # onnxruntime instalado cuando el motor activo es dlib.
+        self._motor_onnx = None
+
+    def _onnx(self):
+        if self._motor_onnx is None:
+            from motor_ia.reconocimiento.motor_onnx import MotorONNX
+            self._motor_onnx = MotorONNX(RUTA_MODELO_ONNX, hilos=ONNX_HILOS)
+            print(f"    Motor de embeddings: ONNX ({_DIMENSIONES}D) "
+                  f"desde {RUTA_MODELO_ONNX}")
+        return self._motor_onnx
 
     # ------------------------------------------------------------------
     # Generacion de embeddings
@@ -91,16 +125,28 @@ class ReconocedorFacial:
 
         return imagen_out
 
-    def generar_embedding(self, imagen_rgb, bbox, num_jitters=None):
+    def generar_embedding(self, imagen_rgb, bbox, num_jitters=None, puntos=None):
         """
-        Genera vector 128D del rostro.
-        Usa model='large' (68 landmarks) para alineación más precisa
-        y CLAHE para normalizar iluminación.
+        Genera el vector del rostro con el motor configurado.
 
-        num_jitters: numero de transformaciones que dlib promedia. 1 en
-            reconocimiento (coste), mas alto en registro (calidad de la
-            plantilla de referencia, que se calcula una sola vez).
+        Con MOTOR_EMBEDDING=onnx son 512 dimensiones normalizadas a norma 1;
+        con dlib, 128 sin normalizar. No son comparables entre si.
+
+        Args:
+            imagen_rgb: frame del que recortar.
+            bbox: (x, y, x2, y2) en coordenadas de ESE frame.
+            num_jitters: solo dlib. Numero de transformaciones que promedia:
+                1 en reconocimiento (coste), mas en registro (la plantilla de
+                referencia se calcula una sola vez, asi que ahi importa mas la
+                calidad que el tiempo).
+            puntos: landmarks (N, 2) en coordenadas de ese mismo frame. El
+                motor ONNX los usa para alinear el rostro por 5 puntos, que es
+                como se entreno; sin ellos cae en un simple reescalado del
+                recorte, que es peor. dlib los ignora: alinea por su cuenta.
         """
+        if _USA_ONNX:
+            return self._onnx().generar(imagen_rgb, bbox, puntos)
+
         if num_jitters is None:
             num_jitters = JITTERS_RECONOCIMIENTO
 
@@ -118,6 +164,32 @@ class ReconocedorFacial:
         if encodings:
             return encodings[0]
         return None
+
+    def generar_lote(self, imagen_rgb, rostros):
+        """
+        Embeddings de VARIOS rostros del mismo frame.
+
+        Con ONNX es una sola inferencia y ahi esta la ganancia del caso
+        multi-rostro: medido, 5 rostros en 26 ms (5.2 ms cada uno) frente a
+        7.6 ms cuando va de uno en uno. Con dlib no hay lote posible, asi que
+        se recorre; se ofrece igual para que quien llame no tenga que
+        preguntar por el motor.
+
+        Args:
+            rostros: lista de (bbox, puntos).
+
+        Returns:
+            Lista de vectores (o None en las posiciones que fallaron).
+        """
+        if not rostros:
+            return []
+
+        if _USA_ONNX:
+            matriz = self._onnx().generar_lote(imagen_rgb, rostros)
+            return [fila for fila in matriz]
+
+        return [self.generar_embedding(imagen_rgb, bbox, puntos=puntos)
+                for bbox, puntos in rostros]
 
     # ------------------------------------------------------------------
     # Matching
@@ -165,12 +237,12 @@ class ReconocedorFacial:
         # Distancia de la mejor identidad DISTINTA (inf si solo hay una)
         d2 = float(por_identidad[orden[1]]) if n_identidades > 1 else float("inf")
 
-        if d1 >= TOLERANCIA_FACIAL:
+        if d1 >= _TOLERANCIA:
             return None, 0.0, None
 
         # Test de margen: si otra persona esta casi igual de cerca, es un
         # empate y no una identificacion.
-        if (d2 - d1) < MARGEN_IDENTIDAD:
+        if (d2 - d1) < _MARGEN:
             return None, 0.0, None
 
         usuario_id, nombre = self._identidades[mejor]
@@ -194,6 +266,7 @@ class ReconocedorFacial:
         filas = []
         angulos = []
         idx_identidad = []
+        incompatibles = []
 
         for usuario in usuarios:
             if "embeddings" in usuario:
@@ -219,6 +292,23 @@ class ReconocedorFacial:
                     angulo = None
 
                 vector = np.asarray(emb, dtype=np.float64)
+
+                # Plantilla de OTRO motor: se descarta.
+                #
+                # Los dos motores producen espacios distintos e incomparables
+                # (128D sin normalizar contra 512D normalizado). Si se cambia
+                # MOTOR_EMBEDDING sin volver a registrar, aqui llegan vectores
+                # de la longitud equivocada. Compararlos no es que diera peor
+                # precision: `self._matriz - emb` con longitudes distintas o
+                # revienta o hace broadcast y devuelve numeros sin significado,
+                # y el sistema acabaria concediendo o denegando accesos por
+                # aritmetica basura. Mejor no reconocer a nadie y decirlo.
+                if vector.shape[-1] != _DIMENSIONES:
+                    incompatibles.append(
+                        (usuario.get("nombre", "?"), int(vector.shape[-1]))
+                    )
+                    continue
+
                 filas.append(vector)
                 angulos.append(angulo)
                 idx_identidad.append(idx)
@@ -235,11 +325,23 @@ class ReconocedorFacial:
             self._angulos = np.array(angulos, dtype=object)
             self._idx_identidad = np.array(idx_identidad, dtype=np.int64)
         else:
-            self._matriz = np.zeros((0, 128), dtype=np.float64)
+            self._matriz = np.zeros((0, _DIMENSIONES), dtype=np.float64)
             self._angulos = np.zeros(0, dtype=object)
             self._idx_identidad = np.zeros(0, dtype=np.int64)
 
         print(f"    Caché: {len(self.cache)} embeddings / {len(self._identidades)} usuarios")
+
+        if incompatibles:
+            nombres = sorted({n for n, _ in incompatibles})
+            dims = sorted({d for _, d in incompatibles})
+            print(f"     {len(incompatibles)} plantillas DESCARTADAS por ser de "
+                  f"otro motor: {dims} dimensiones, se esperaban {_DIMENSIONES}.")
+            print(f"       Afecta a: {', '.join(nombres)}")
+            print(f"       MOTOR_EMBEDDING={MOTOR_EMBEDDING} exige volver a "
+                  f"registrar a esos usuarios.")
+            if not self.cache:
+                print("       NO SE RECONOCERA A NADIE hasta que se registren "
+                      "de nuevo.")
 
     def recargar_cache(self, usuarios):
         """Alias para actualizar después de registrar."""

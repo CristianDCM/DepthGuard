@@ -156,7 +156,12 @@ def obtener_recorte():
                 det.cerrar()
                 cam.release()
     except Exception as e:
-        log(f"  (sin camara utilizable: {type(e).__name__})")
+        # Se imprime el mensaje y no solo el tipo: "AttributeError" a secas no
+        # dice nada, y no es un fallo grave —el recorte sintetico vale igual
+        # para medir, porque el coste de dlib es plano respecto al tamano del
+        # recorte (medido: 108 ms con 90x120 y 110 ms con 400x520)— pero si
+        # senala una incompatibilidad de version que conviene ver.
+        log(f"  (sin camara utilizable: {type(e).__name__}: {e})")
 
     rs = np.random.RandomState(7)
     crop = rs.randint(60, 200, (240, 180, 3), dtype=np.uint8)
