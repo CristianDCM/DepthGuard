@@ -27,7 +27,9 @@ if sys.stdout.encoding != 'utf-8':
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config.settings import CAPTURAS_DIR, MODO_CAMARA, SUPABASE_URL, DIAS_RETENCION
+from config.settings import (
+    CAPTURAS_DIR, MODO_CAMARA, SUPABASE_URL, DIAS_RETENCION, CLEANUP_EN_EDGE,
+)
 from motor_ia.pipeline import ejecutar_pipeline
 from motor_ia.estado_registro import EstadoRegistro
 from backend.supabase_cliente import obtener_cliente
@@ -161,7 +163,10 @@ print(f"  Supabase: {SUPABASE_URL[:40]}...")
 print(f" Heartbeat: cada 30s")
 print(f" Command Listener: polling cada 2s")
 print(f" WebRTC: canal 'webrtc-signaling-{camera_id}'")
-print(f" Cleanup: cada 24h (retención: {DIAS_RETENCION} días)")
+if CLEANUP_EN_EDGE:
+    print(f" Cleanup: cada 24h (retención: {DIAS_RETENCION} días)")
+else:
+    print(" Cleanup: desactivado en el edge (lo hace la base de datos)")
 print()
 print("Presiona Ctrl+C para detener")
 print()

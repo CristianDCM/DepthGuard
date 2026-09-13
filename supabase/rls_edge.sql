@@ -216,7 +216,11 @@ create policy edge_reemplaza_preview on storage.objects
 -- preview en vivo son legibles por cualquiera que tenga o adivine la URL, sin
 -- caducidad. Son imagenes de personas identificadas.
 
-update storage.buckets set public = false where id = 'capturas';
+-- OJO: esta linea es de la FASE 3, no de la 1. Va comentada a proposito.
+-- Si se ejecuta antes de que el edge tenga STORAGE_PRIVADO=true, el preview
+-- en vivo se queda en negro. Descomentala solo cuando toque (ver abajo).
+--
+--   update storage.buckets set public = false where id = 'capturas';
 
 -- Con el bucket privado, leer un objeto exige una URL firmada. El edge las
 -- genera (backend/almacenamiento.py) y el frontend las consume:
@@ -226,16 +230,24 @@ update storage.buckets set public = false where id = 'capturas';
 --     nombre del fichero. Tiene que leer `preview_url` de la camara activa en
 --     estado_sistema.camaras, que el heartbeat renueva cada 30s.
 --
--- ORDEN DE APLICACION:
---   1. Desplegar el frontend con el soporte de preview_url.
---   2. Ejecutar este update.
---   3. Poner STORAGE_PRIVADO=true en el .env del edge.
+-- ORDEN DE APLICACION — SIN CAIDAS
 --
--- El frontend YA lleva ese soporte (rama claude/seguridad-c2-c5 de
--- DepthGuard_Design) y cae a la URL publica heredada si el edge todavia no
--- publica preview_url, asi que no hay ventana sin imagen. Aun asi, haz (2)
--- despues de (1): si cierras el bucket con un frontend antiguo desplegado, el
--- preview se queda en negro hasta que despliegues.
+-- Una URL firmada funciona TAMBIEN sobre un bucket publico. Eso permite un
+-- orden en el que nunca hay un momento sin imagen:
+--
+--   1. Desplegar el frontend con soporte de preview_url.
+--      (Hecho: rama claude/seguridad-c2-c5 de DepthGuard_Design.)
+--
+--   2. STORAGE_PRIVADO=true en el .env del edge + reiniciar.
+--      El edge empieza a publicar URLs FIRMADAS, que ya funcionan porque el
+--      bucket sigue siendo publico. Comprueba aqui que el preview y las
+--      fotos del historial se siguen viendo.
+--
+--   3. Solo entonces, cerrar el bucket con el update de abajo.
+--      Las URLs firmadas siguen valiendo; las publicas dejan de valer.
+--
+-- Si lo haces al reves (cerrar el bucket primero), el preview se queda en
+-- negro hasta que reinicies el edge con STORAGE_PRIVADO=true.
 
 -- Quien puede leer las capturas con su propia sesion (no por URL firmada).
 -- CORRECCION: aqui tambien se proponia comprobar `public.admin`, que no
