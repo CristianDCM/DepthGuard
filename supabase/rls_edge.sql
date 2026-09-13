@@ -71,6 +71,11 @@ grant usage on schema public to depthguard_edge;
 -- usuarios: leer plantillas de gente activa, y escribir SOLO biometria
 grant select (id, nombre, embeddings_json, num_angulos, activo)
   on public.usuarios to depthguard_edge;
+-- OJO al escribir desde PostgREST: por defecto devuelve la fila actualizada
+-- con RETURNING *, y para eso exige LECTURA de TODAS las columnas. El edge solo
+-- puede leer 5 de las 9 de `usuarios`, asi que la escritura fallaba con
+-- "permission denied for table usuarios" aunque el UPDATE estuviera concedido.
+-- Se escribe con returning="minimal" (backend/command_listener.py).
 grant update (embeddings_json, num_angulos)
   on public.usuarios to depthguard_edge;
 
@@ -148,15 +153,44 @@ create policy edge_actualiza_estado on public.estado_sistema
   with check (id = 1);
 
 -- comandos_edge: solo comandos pendientes o en curso
+-- La politica de LECTURA no filtra por estado, y es a proposito.
+--
+-- La version anterior filtraba por estado in ('pendiente','en_progreso') y
+-- rompia el sistema de una forma que costo encontrar: un UPDATE que referencia
+-- columnas de la tabla aplica tambien las politicas de SELECT a la fila
+-- RESULTANTE, asi que el edge no podia escribir un estado que no tenia permiso
+-- para leer. Comprobado sobre la base real: la condicion efectiva era la
+-- interseccion de lectura y escritura, y solo pasaba 'en_progreso'.
+--
+-- El filtro de "que trabajo hay pendiente" no se pierde: vive donde ya estaba
+-- de verdad, en la consulta del listener, que siempre pide estado='pendiente'
+-- (backend/command_listener.py:_poll_comandos).
 drop policy if exists edge_lee_comandos on public.comandos_edge;
 create policy edge_lee_comandos on public.comandos_edge
   for select to depthguard_edge
-  using (estado in ('pendiente', 'en_progreso'));
+  using (true);
 
+-- USING y WITH CHECK dicen cosas DISTINTAS, y ahi esta el punto de tenerlas
+-- separadas:
+--   USING      -> solo puede tocar comandos que siguen ABIERTOS. Uno ya cerrado
+--                 es intocable (el UPDATE no afecta a ninguna fila).
+--   WITH CHECK -> solo puede dejarlos en un estado de avance o cierre. Volver a
+--                 'pendiente' esta prohibido: seria darle la capacidad de
+--                 reencolar indefinidamente un enrolamiento biometrico.
+--
+-- El WITH CHECK explicito es obligatorio. Sin el, PostgreSQL usa la expresion
+-- de USING para validar tambien la fila nueva, y entonces el edge puede coger
+-- un comando pero NO cerrarlo: falla con "new row violates row-level security
+-- policy" y, peor, el comando se queda 'pendiente' y el listener lo reejecuta
+-- en cada vuelta.
+--
+-- Los cuatro estados son los que escribe backend/command_listener.py; coinciden
+-- con la restriccion CHECK de la tabla menos 'pendiente'.
 drop policy if exists edge_actualiza_comandos on public.comandos_edge;
 create policy edge_actualiza_comandos on public.comandos_edge
   for update to depthguard_edge
-  using (estado in ('pendiente', 'en_progreso'));
+  using (estado in ('pendiente', 'en_progreso'))
+  with check (estado in ('en_progreso', 'completado', 'error', 'cancelado'));
 
 
 -- ---------------------------------------------------------------------------

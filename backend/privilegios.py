@@ -49,7 +49,10 @@ TABLAS = [
              "El comando se autoriza antes de llegar aqui "
              "(backend/autorizacion_registro.py): el usuario debe existir y "
              "estar activo, el nombre debe cuadrar con la BD, y sobrescribir "
-             "biometria existente exige autorizacion explicita.",
+             "biometria existente exige autorizacion explicita. Se escribe con "
+             "returning='minimal': PostgREST devuelve por defecto la fila con "
+             "RETURNING *, y eso exige leer las 9 columnas de usuarios cuando "
+             "el edge solo puede leer 5.",
     ),
     Privilegio(
         recurso="historial",
@@ -80,8 +83,15 @@ TABLAS = [
         recurso="comandos_edge",
         operaciones=("select", "update"),
         usado_en="backend/command_listener.py",
-        nota="Lee comandos pendientes y actualiza su estado/progreso. "
-             "El edge NUNCA necesita insertar ni borrar comandos.",
+        nota="Lee comandos y actualiza su estado/progreso. El edge NUNCA "
+             "necesita insertar ni borrar comandos. La politica de UPDATE "
+             "separa USING (solo comandos abiertos) de WITH CHECK (solo "
+             "estados de avance o cierre, nunca de vuelta a 'pendiente', que "
+             "seria poder reencolar un enrolamiento). La de SELECT no filtra "
+             "por estado: un UPDATE que referencia columnas aplica tambien las "
+             "politicas de SELECT a la fila resultante, asi que el edge no "
+             "podia escribir un estado que no pudiera leer. El filtro de "
+             "trabajo pendiente vive en la consulta del listener.",
     ),
 ]
 

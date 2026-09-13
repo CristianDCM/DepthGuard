@@ -193,10 +193,17 @@ def _ejecutar_registro(supabase, comando, modo_registro):
                 embeddings_json = [emb.tolist() if hasattr(emb, 'tolist') else emb
                                    for emb in embeddings[:_ANGULOS_REQUERIDOS]]
 
+                # returning="minimal" no es cosmetico: por defecto PostgREST
+                # devuelve la fila actualizada con RETURNING *, y para eso
+                # exige LECTURA de TODAS las columnas. El edge solo puede leer
+                # 5 de las 9 de `usuarios` (no ve notas, fecha_registro,
+                # created_at ni foto_perfil), asi que pedir la representacion
+                # fallaba con "permission denied for table usuarios" aunque el
+                # UPDATE de embeddings_json estuviera permitido.
                 supabase.table("usuarios").update({
                     "embeddings_json": embeddings_json,
                     "num_angulos": _ANGULOS_REQUERIDOS,
-                }).eq("id", usuario_id).execute()
+                }, returning="minimal").eq("id", usuario_id).execute()
 
                 # Marcar registro como completado
                 modo_registro.completar({"usuario_id": usuario_id, "angulos": _ANGULOS_REQUERIDOS})
@@ -248,6 +255,11 @@ def _actualizar_comando(supabase, cmd_id, estado, progreso=None, resultado=None)
         update["resultado"] = resultado
 
     try:
-        supabase.table("comandos_edge").update(update).eq("id", cmd_id).execute()
+        # Sin returning="minimal" esto pediria RETURNING * sobre comandos_edge.
+        # Hoy funcionaria —el edge ve todas sus columnas— pero se romperia en
+        # cuanto alguien anada una columna que el edge no pueda leer.
+        supabase.table("comandos_edge").update(
+            update, returning="minimal"
+        ).eq("id", cmd_id).execute()
     except Exception as e:
         print(f"[CommandListener] Error actualizando comando: {e}")

@@ -116,7 +116,9 @@ def _ejecutar_limpieza():
             lote_ids = ids_a_eliminar[i:i + 50]
             for reg_id in lote_ids:
                 try:
-                    supabase.table("historial").delete().eq("id", reg_id).execute()
+                    supabase.table("historial").delete(
+                        returning="minimal"
+                    ).eq("id", reg_id).execute()
                     registros_eliminados += 1
                 except Exception as e:
                     # Un fallo suelto (una fila que ya no esta) no debe parar
