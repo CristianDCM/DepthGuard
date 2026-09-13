@@ -64,6 +64,8 @@ def _dibujar_persona(vista, track, en_registro):
     confianza = track.get("confianza", 0)
     metricas = track.get("metricas", {})
     reg_info = track.get("registro_info")
+    liveness_estado = track.get("liveness_estado", "VIVO")
+    liveness_motivo = track.get("liveness_motivo", "")
 
     # Color del bbox según estado
     if en_registro and reg_info:
@@ -89,6 +91,15 @@ def _dibujar_persona(vista, track, en_registro):
     elif es_dist:
         color_bbox = (0, 165, 255) # Naranja alerta
         etiqueta = motivo
+    elif liveness_estado == "PENDIENTE":
+        # Identidad puede estar resuelta, pero SIN prueba de vida no se
+        # concede acceso. Verde aquí engañaría al operador: el evento de
+        # ACCESO_PERMITIDO no se ha emitido.
+        color_bbox = (0, 200, 255) # Ámbar: en espera, no concedido
+        if nombre:
+            etiqueta = f"{nombre} - {liveness_motivo}"
+        else:
+            etiqueta = liveness_motivo or "Verificando vida..."
     elif nombre:
         color_bbox = (50, 255, 50) # Verde neón suave
         etiqueta = f"{nombre} ({confianza * 100:.1f}%)"

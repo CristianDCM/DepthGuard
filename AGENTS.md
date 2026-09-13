@@ -27,7 +27,8 @@ Set `MODO_CAMARA` in `.env`:
 |------|---------|
 | `iniciar.py` | Entry point, starts 3 threads (IA + sync + heartbeat) |
 | `motor_ia/pipeline.py` | Orchestrator: camera → detection → antispoofing → recognition |
-| `motor_ia/tracking.py` | `PersonaTrack` (incl. temporal voting) + IoU association across frames |
+| `motor_ia/tracking.py` | `PersonaTrack` (incl. temporal voting + liveness state) + IoU association |
+| `motor_ia/antispoofing/liveness.py` | 2D liveness: blink (EAR) + screen-texture metrics |
 | `motor_ia/camara/factory.py` | Camera factory based on MODO_CAMARA |
 | `backend/supabase_cliente.py` | Supabase client singleton (service_role key) |
 | `backend/supabase_sync.py` | Store-and-forward: queue → Supabase historial |
@@ -39,6 +40,42 @@ Set `MODO_CAMARA` in `.env`:
 - Requires Intel RealSense SDK if `MODO_CAMARA=realsense`
 - Requires `.env` file with `SUPABASE_URL` and `SUPABASE_SERVICE_KEY`
 - Supabase tables must be created beforehand (see DISEÑO_SISTEMA.md)
+
+## Liveness / anti-spoofing
+
+**The 3D check is only a liveness proof when depth comes from a real sensor.**
+`CamaraSimulada` used to synthesize a depth map from the bbox the 2D detector
+had just found, so the verifier validated a dome the system itself drew: any
+detected face passed as real (printed photo included), always with identical
+metrics. That synthetic depth is gone — the simulated camera now returns
+`None` and declares `profundidad_real = False`.
+
+Access now requires BOTH:
+
+1. An identity verdict (temporal voting — see Recognition accuracy).
+2. A liveness proof — `liveness_estado == VIVO`.
+
+These are checked separately every frame, because the identity may be settled
+before the person blinks; the access event fires when both land.
+
+| Variable | What it does |
+|----------|--------------|
+| `REQUERIR_CAMARA_3D` | **Set to `true` in real deployments.** A camera without a depth sensor then grants nothing. Defaults to `false` so a webcam setup keeps working on 2D liveness alone |
+| `LIVENESS_PARPADEOS_REQUERIDOS` | Blinks needed to pass |
+| `LIVENESS_TIMEOUT` | Seconds in front of the camera with no blink before it counts as spoofing rather than "not yet" |
+| `LIVENESS_FACTOR_CIERRE` / `_APERTURA` | Eye close/open thresholds as a fraction of that person's own baseline EAR (an absolute threshold fails on narrow eyes). The gap between them is hysteresis against landmark jitter |
+| `LIVENESS_FRAMES_BASE` | Open-eye frames needed to learn the baseline |
+| `LIVENESS_PARPADEO_MIN_FRAMES` / `_MAX_FRAMES` | Valid blink duration. The max matters: sustained closed eyes are not a blink |
+| `LIVENESS_TEXTURA_BLOQUEA` | Whether screen-texture metrics can reject. **Default `false`** — these thresholds depend on your camera and lighting, and uncalibrated they reject legitimate people. Collect real `moire`/`especular` values from your events first |
+| `LIVENESS_MOIRE_MAX` / `LIVENESS_ESPECULAR_MAX` | Texture thresholds once you enable blocking |
+
+Every event records `metricas["verificacion"]` as `"3D+2D"` or `"2D"`, plus the
+liveness metrics, so the audit trail says which layers actually verified.
+
+**What this does NOT stop:** a looped video of the person (a video blinks).
+Defeating replay and masks needs a real depth sensor, a passive PAD model
+(e.g. MiniFASNet ONNX), or a randomized active challenge. Blink is the floor,
+not the ceiling.
 
 ## Recognition accuracy
 

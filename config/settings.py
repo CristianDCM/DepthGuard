@@ -48,6 +48,52 @@ RANGO_DIST_MIN = float(_env.get("RANGO_DIST_MIN", "25"))
 RANGO_DIST_MAX = float(_env.get("RANGO_DIST_MAX", "150"))
 MIN_PIXELES_VALIDOS = float(_env.get("MIN_PIXELES_VALIDOS", "0.30"))
 
+# === LIVENESS (prueba de vida 2D) ===
+#
+# El verificador 3D solo prueba vida si la profundidad viene de un sensor
+# real. Estas senales dependen de lo que hay delante de la camara y no
+# necesitan hardware extra. Ver motor_ia/antispoofing/liveness.py para sus
+# limites (no derrotan un video en bucle).
+
+# Exigir camara con profundidad real para conceder accesos.
+# False (por defecto) permite operar con webcam apoyandose en el liveness 2D.
+# PONER A true EN DESPLIEGUE REAL: es la unica defensa solida contra
+# mascaras y video replay.
+REQUERIR_CAMARA_3D = _env.get("REQUERIR_CAMARA_3D", "false").lower() == "true"
+
+# Parpadeos necesarios para dar la prueba de vida por superada.
+LIVENESS_PARPADEOS_REQUERIDOS = int(_env.get("LIVENESS_PARPADEOS_REQUERIDOS", "1"))
+
+# Segundos delante de la camara sin un solo parpadeo antes de declararlo
+# suplantacion en vez de "aun no".
+LIVENESS_TIMEOUT = float(_env.get("LIVENESS_TIMEOUT", "12.0"))
+
+# Umbral de cierre/apertura del ojo como FRACCION de la linea base de esa
+# persona (un umbral absoluto fallaria con ojos estrechos). La histeresis
+# entre los dos evita contar parpadeos por ruido.
+LIVENESS_FACTOR_CIERRE = float(_env.get("LIVENESS_FACTOR_CIERRE", "0.72"))
+LIVENESS_FACTOR_APERTURA = float(_env.get("LIVENESS_FACTOR_APERTURA", "0.85"))
+
+# EAR minimo para aceptar una muestra como "ojo abierto" al calibrar.
+LIVENESS_EAR_MINIMO = float(_env.get("LIVENESS_EAR_MINIMO", "0.12"))
+
+# Frames de ojo abierto necesarios para fijar la linea base.
+LIVENESS_FRAMES_BASE = int(_env.get("LIVENESS_FRAMES_BASE", "12"))
+
+# Duracion valida de un parpadeo, en frames. Un cierre mas largo no es un
+# parpadeo (ojos cerrados sostenidos, o una foto con los ojos cerrados).
+LIVENESS_PARPADEO_MIN_FRAMES = int(_env.get("LIVENESS_PARPADEO_MIN_FRAMES", "1"))
+LIVENESS_PARPADEO_MAX_FRAMES = int(_env.get("LIVENESS_PARPADEO_MAX_FRAMES", "10"))
+
+# Textura (deteccion de pantalla). Por defecto se REGISTRA pero NO BLOQUEA:
+# estos umbrales dependen de la camara, la optica y la luz del sitio, y sin
+# calibrar generan rechazos de personas legitimas. Recoge metricas reales de
+# tu instalacion (salen en las metricas del evento) y solo entonces pon
+# LIVENESS_TEXTURA_BLOQUEA=true.
+LIVENESS_TEXTURA_BLOQUEA = _env.get("LIVENESS_TEXTURA_BLOQUEA", "false").lower() == "true"
+LIVENESS_MOIRE_MAX = float(_env.get("LIVENESS_MOIRE_MAX", "0.35"))
+LIVENESS_ESPECULAR_MAX = float(_env.get("LIVENESS_ESPECULAR_MAX", "0.08"))
+
 # === RECONOCIMIENTO ===
 TOLERANCIA_FACIAL = float(_env.get("TOLERANCIA_FACIAL", "0.50"))
 COOLDOWN_EMBEDDING = float(_env.get("COOLDOWN_EMBEDDING", "2.0"))

@@ -9,6 +9,7 @@ import time
 from collections import Counter, deque
 
 from config.settings import VOTOS_VENTANA, VOTOS_REQUERIDOS
+from motor_ia.antispoofing.liveness import DetectorParpadeo, PENDIENTE
 
 
 # Timeout para considerar que una persona se fue (segundos)
@@ -35,9 +36,17 @@ class PersonaTrack:
         self.angulo_v = angulo_v
         self.direccion = direccion
 
-        # Anti-spoofing
+        # Anti-spoofing 3D
         self.spoofing_cache = None   # (es_real, es_dist, motivo, metricas)
         self.t_spoofing = 0
+
+        # Prueba de vida (liveness 2D). El parpadeo es una senal temporal,
+        # asi que su estado vive con la persona, no con el frame.
+        self.parpadeo = DetectorParpadeo()
+        self.liveness_estado = PENDIENTE
+        self.liveness_motivo = "Esperando parpadeo"
+        self.liveness_metricas = {}
+        self.primera_vez_visto = time.time()
 
         # Reconocimiento
         self.nombre = None
@@ -107,6 +116,10 @@ class PersonaTrack:
         mejor = max((v for v in self._votos if v[0] == clave), key=lambda v: v[2])
         return True, mejor[0], mejor[1], mejor[2]
 
+    def tiempo_visible(self, ahora):
+        """Segundos desde que se vio a esta persona por primera vez."""
+        return ahora - self.primera_vez_visto
+
     def esta_activo(self, ahora):
         """Retorna True si el track sigue activo (no ha expirado)."""
         return (ahora - self.ultimo_visto) < _SESION_TIMEOUT
@@ -130,6 +143,8 @@ class PersonaTrack:
             "nombre": self.nombre,
             "confianza": self.confianza,
             "motivo_gate": self.motivo_gate,
+            "liveness_estado": self.liveness_estado,
+            "liveness_motivo": self.liveness_motivo,
         }
 
 

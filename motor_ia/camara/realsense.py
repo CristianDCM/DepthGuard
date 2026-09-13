@@ -6,6 +6,10 @@ import numpy as np
 
 class CamaraRealSense:
 
+    # Esta camara si entrega profundidad medida por sensor, asi que el
+    # pipeline puede ejecutar el verificador 3D sobre ella.
+    profundidad_real = True
+
     def __init__(self):
         self.pipeline = None
         self.align = None

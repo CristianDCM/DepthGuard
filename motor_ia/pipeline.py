@@ -22,6 +22,7 @@ from motor_ia.tracking import (
     prioridad_reconocimiento,
 )
 from motor_ia.antispoofing.verificador_3d import VerificadorAntiSpoofing
+from motor_ia.antispoofing.liveness import VerificadorLiveness, VIVO, FALLO
 from motor_ia.reconocimiento.embedding_generator import ReconocedorFacial
 from motor_ia.visualizacion import dibujar_preview, mostrar_preview
 from motor_ia.validacion_calidad import (
@@ -36,6 +37,7 @@ from config.settings import (
     MAX_YAW_RECONOCIMIENTO, MAX_PITCH_RECONOCIMIENTO,
     MAX_EMBEDDINGS_POR_FRAME,
     JITTERS_REGISTRO,
+    REQUERIR_CAMARA_3D,
 )
 
 # FPS objetivo para el pipeline (evita consumir 100% CPU)
@@ -127,10 +129,25 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
     camara = crear_camara()
     detector = DetectorFaceMesh(max_rostros=5, confianza=0.5)
     antispoofing = VerificadorAntiSpoofing()
+    liveness = VerificadorLiveness()
     reconocedor = ReconocedorFacial()
 
-    # Detectar si es cámara simulada para optimizar profundidad
-    _es_simulada = hasattr(camara, 'actualizar_profundidad')
+    # ¿La cámara MIDE profundidad, o no la tiene?
+    # Solo el 3D de un sensor real es prueba de vida; la profundidad
+    # sintética que antes generaba la cámara simulada se derivaba del propio
+    # bbox detectado, asi que validaba una cúpula dibujada por el sistema.
+    _hay_3d = getattr(camara, "profundidad_real", False)
+
+    if not _hay_3d:
+        if REQUERIR_CAMARA_3D:
+            print(" REQUERIR_CAMARA_3D=true pero la cámara no entrega")
+            print("    profundidad real. No se concederán accesos.")
+        else:
+            print(" AVISO DE SEGURIDAD: cámara sin profundidad real.")
+            print("    Anti-spoofing 3D NO disponible.")
+            print("    Los accesos se conceden solo con liveness 2D (parpadeo),")
+            print("    que NO detiene un vídeo en bucle de la persona.")
+            print("    En despliegue real usa REALSENSE y REQUERIR_CAMARA_3D=true.")
 
     # Conectar cámara con reintentos
     intentos = 0
@@ -255,21 +272,16 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                     track = PersonaTrack(bbox, angulo, direccion, angulo_v)
                     tracks_activos.append(track)
 
-                # Si cámara simulada: generar profundidad a partir del bbox
-                if _es_simulada and bbox is not None:
-                    camara.actualizar_profundidad(bbox)
-                    profundidad = camara._prof_cache if camara._prof_cache is not None else profundidad
-
                 # === MODO REGISTRO (solo la persona más grande/cercana) ===
                 if modo_registro.activo:
                     # Solo procesar la persona con el bbox más grande (más cercana)
                     if track == persona_mas_grande(tracks_activos):
                         es_real_reg = True
-                        if track.spoofing_cache:
+                        if _hay_3d and track.spoofing_cache:
                             es_real_reg = track.spoofing_cache[0]
 
-                        # Anti-spoofing para registro
-                        if ahora - track.t_spoofing >= COOLDOWN_ANTISPOOFING:
+                        # Anti-spoofing 3D para registro (solo con sensor real)
+                        if _hay_3d and ahora - track.t_spoofing >= COOLDOWN_ANTISPOOFING:
                             track.t_spoofing = ahora
                             es_real, es_dist, motivo, metricas = antispoofing.verificar(
                                 profundidad, bbox
@@ -355,10 +367,21 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                         tracks_frame.append(track.to_vis_dict())
                     continue
 
-                # === MODO NORMAL: Anti-spoofing + Reconocimiento por persona ===
+                # === MODO NORMAL: liveness + anti-spoofing 3D + reconocimiento ===
 
-                # Anti-spoofing (cada COOLDOWN_ANTISPOOFING por persona)
-                if ahora - track.t_spoofing >= COOLDOWN_ANTISPOOFING:
+                # --- PRUEBA DE VIDA 2D (cada frame) ---
+                # Se evalúa siempre, también con cámara 3D: defensa en capas.
+                # Es por frame porque el parpadeo es una señal temporal.
+                estado_liveness, motivo_liveness, met_liveness = liveness.evaluar(
+                    track.parpadeo, rostro.puntos, imagen_rgb, bbox,
+                    track.tiempo_visible(ahora)
+                )
+                track.liveness_estado = estado_liveness
+                track.liveness_motivo = motivo_liveness
+                track.liveness_metricas = met_liveness
+
+                # --- ANTI-SPOOFING 3D (solo si la cámara MIDE profundidad) ---
+                if _hay_3d and ahora - track.t_spoofing >= COOLDOWN_ANTISPOOFING:
                     track.t_spoofing = ahora
                     es_real, es_dist, motivo, metricas = antispoofing.verificar(
                         profundidad, bbox
@@ -367,14 +390,27 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                     metricas["direccion"] = direccion
                     track.spoofing_cache = (es_real, es_dist, motivo, metricas)
 
-                if track.spoofing_cache is None:
-                    tracks_frame.append(track.to_vis_dict())
-                    continue
+                if _hay_3d:
+                    if track.spoofing_cache is None:
+                        tracks_frame.append(track.to_vis_dict())
+                        continue
+                    es_real, es_dist, motivo, metricas = track.spoofing_cache
+                else:
+                    # Sin sensor no se inventan métricas 3D: antes se enviaban
+                    # a Supabase valores fabricados (distancia 68.8cm siempre)
+                    # que el operador leía como una medición real.
+                    es_real, es_dist, motivo = True, False, ""
+                    metricas = {"angulo": angulo, "direccion": direccion}
 
-                es_real, es_dist, motivo, metricas = track.spoofing_cache
+                # El evento queda trazable: qué capas verificaron de verdad.
+                metricas["liveness"] = met_liveness
+                metricas["verificacion"] = "3D+2D" if _hay_3d else "2D"
 
-                # === FRAUDE ===
-                if not es_real and not es_dist:
+                # === FRAUDE: lo descarta el 3D, o lo descarta el liveness ===
+                fraude_3d = (not es_real and not es_dist)
+                fraude_liveness = (estado_liveness == FALLO)
+
+                if fraude_3d or fraude_liveness:
                     if track.sesion_tipo != "FRAUDE":
                         track.sesion_tipo = "FRAUDE"
                         track.sesion_sujeto = None
@@ -382,7 +418,7 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                         ruta = _guardar_foto(color, "fraude")
                         cola_eventos.put({
                             "tipo": "FRAUDE",
-                            "motivo": motivo,
+                            "motivo": motivo if fraude_3d else motivo_liveness,
                             "metricas": metricas,
                             "foto_ruta": ruta,
                             "frame": color.copy()
@@ -434,42 +470,15 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                             )
 
                             # Un solo embedding no decide: vota.
+                            # Decidir la identidad y CONCEDER el acceso son
+                            # dos cosas distintas: lo segundo se hace abajo,
+                            # y solo con prueba de vida.
                             track.registrar_voto(usuario_id, nombre, confianza)
-                            hay_veredicto, uid_v, nombre_v, conf_v = track.veredicto()
-
-                            if hay_veredicto:
+                            hay, uid_v, nombre_v, conf_v = track.veredicto()
+                            if hay:
                                 track.nombre = nombre_v
                                 track.confianza = conf_v
                                 track.usuario_id = uid_v
-
-                                if nombre_v:
-                                    es_nuevo = (
-                                        track.sesion_tipo != "ACCESO_PERMITIDO" or
-                                        track.sesion_sujeto != uid_v
-                                    )
-                                    if es_nuevo:
-                                        track.sesion_tipo = "ACCESO_PERMITIDO"
-                                        track.sesion_sujeto = uid_v
-                                        ruta = _guardar_foto(color, "acceso")
-                                        cola_eventos.put({
-                                            "tipo": "ACCESO_PERMITIDO",
-                                            "nombre": nombre_v,
-                                            "usuario_id": uid_v,
-                                            "confianza": conf_v,
-                                            "metricas": metricas,
-                                            "foto_ruta": ruta,
-                                            "frame": color.copy()
-                                        })
-                                elif track.sesion_tipo != "DESCONOCIDO":
-                                    track.sesion_tipo = "DESCONOCIDO"
-                                    track.sesion_sujeto = None
-                                    ruta = _guardar_foto(color, "desconocido")
-                                    cola_eventos.put({
-                                        "tipo": "DESCONOCIDO",
-                                        "metricas": metricas,
-                                        "foto_ruta": ruta,
-                                        "frame": color.copy()
-                                    })
 
                         # Cadencia rapida hasta tener veredicto, lenta despues:
                         # decidir rapido cuesta CPU, re-confirmar no hace falta
@@ -479,6 +488,49 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                             COOLDOWN_EMBEDDING if ya_decidido
                             else COOLDOWN_EMBEDDING_VOTACION
                         )
+
+                # === CONCESION DEL ACCESO ===
+                # Se comprueba cada frame, no solo al cerrarse la votacion:
+                # la identidad puede quedar decidida antes de que la persona
+                # parpadee, y el acceso debe salir cuando llegan LAS DOS cosas.
+                #
+                # Sin prueba de vida no se concede nada. PENDIENTE no es
+                # fraude: es "todavia no se sabe".
+                if not fraude_3d and not fraude_liveness and not es_dist:
+                    hay, uid_v, nombre_v, conf_v = track.veredicto()
+                    vida_ok = (estado_liveness == VIVO)
+                    # Si se exige sensor 3D, una camara sin el no concede nunca
+                    hardware_ok = _hay_3d or not REQUERIR_CAMARA_3D
+
+                    if hay and vida_ok and hardware_ok:
+                        if nombre_v:
+                            es_nuevo = (
+                                track.sesion_tipo != "ACCESO_PERMITIDO" or
+                                track.sesion_sujeto != uid_v
+                            )
+                            if es_nuevo:
+                                track.sesion_tipo = "ACCESO_PERMITIDO"
+                                track.sesion_sujeto = uid_v
+                                ruta = _guardar_foto(color, "acceso")
+                                cola_eventos.put({
+                                    "tipo": "ACCESO_PERMITIDO",
+                                    "nombre": nombre_v,
+                                    "usuario_id": uid_v,
+                                    "confianza": conf_v,
+                                    "metricas": metricas,
+                                    "foto_ruta": ruta,
+                                    "frame": color.copy()
+                                })
+                        elif track.sesion_tipo != "DESCONOCIDO":
+                            track.sesion_tipo = "DESCONOCIDO"
+                            track.sesion_sujeto = None
+                            ruta = _guardar_foto(color, "desconocido")
+                            cola_eventos.put({
+                                "tipo": "DESCONOCIDO",
+                                "metricas": metricas,
+                                "foto_ruta": ruta,
+                                "frame": color.copy()
+                            })
 
                 tracks_frame.append(track.to_vis_dict())
 
