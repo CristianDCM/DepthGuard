@@ -1,18 +1,69 @@
-"""Genera y compara embeddings faciales."""
+"""
+Genera y compara embeddings faciales.
+
+El matching hace tres cosas que un vecino-mas-cercano simple no hace:
+
+  1. Agrega por IDENTIDAD, no por plantilla. Cada usuario tiene varias
+     plantillas (una por angulo); su puntuacion es la mejor de las suyas.
+
+  2. Exige un MARGEN entre la mejor identidad y la segunda mejor identidad
+     distinta. Con un umbral absoluto suelto, la probabilidad de que
+     *alguien* de la base caiga por debajo del umbral por azar crece con el
+     numero de usuarios. El margen convierte los empates en rechazos.
+
+  3. Devuelve una confianza CALIBRADA (sigmoide centrada en el umbral) en
+     vez de `1 - distancia`, que no es una probabilidad: un match correcto
+     a distancia 0.42 se mostraba como 58% y parecia dudoso.
+"""
+
+import math
 
 import cv2
 import numpy as np
 import face_recognition
-from config.settings import TOLERANCIA_FACIAL
+
+from config.settings import (
+    TOLERANCIA_FACIAL, MARGEN_IDENTIDAD, ESCALA_CONFIANZA,
+    PENALIZACION_POSE, JITTERS_RECONOCIMIENTO,
+)
+from motor_ia.estado_registro import ANGULOS_REGISTRO
+
+
+def calibrar_confianza(distancia, umbral=None, escala=None):
+    """
+    Convierte una distancia euclidiana en una confianza 0..1 monotona
+    decreciente, con 0.50 exactamente en el umbral de aceptacion.
+
+    Sustituye a `1 - distancia`, que no estaba en ninguna escala util.
+    """
+    umbral = TOLERANCIA_FACIAL if umbral is None else umbral
+    escala = ESCALA_CONFIANZA if escala is None else escala
+
+    # Acotar el exponente para que no desborde con distancias grandes
+    exponente = max(-60.0, min(60.0, (float(distancia) - umbral) / escala))
+    return round(1.0 / (1.0 + math.exp(exponente)), 4)
 
 
 class ReconocedorFacial:
 
     def __init__(self):
+        # Lista de dicts (id/nombre/embedding/angulo). Se mantiene por
+        # compatibilidad e introspeccion; el matching usa las matrices.
         self.cache = []
+
+        # Representacion vectorizada de la cache
+        self._matriz = np.zeros((0, 128), dtype=np.float64)   # (M, 128)
+        self._angulos = np.zeros(0, dtype=object)             # (M,) angulo por plantilla
+        self._idx_identidad = np.zeros(0, dtype=np.int64)     # (M,) -> indice de identidad
+        self._identidades = []                               # [(usuario_id, nombre), ...]
+
         # CLAHE: ecualización adaptativa de histograma
         # Normaliza iluminación desigual (sombras, contraluz, etc.)
         self._clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+
+    # ------------------------------------------------------------------
+    # Generacion de embeddings
+    # ------------------------------------------------------------------
 
     def _preprocesar_rostro(self, imagen_rgb, bbox):
         """
@@ -40,12 +91,19 @@ class ReconocedorFacial:
 
         return imagen_out
 
-    def generar_embedding(self, imagen_rgb, bbox):
+    def generar_embedding(self, imagen_rgb, bbox, num_jitters=None):
         """
         Genera vector 128D del rostro.
         Usa model='large' (68 landmarks) para alineación más precisa
         y CLAHE para normalizar iluminación.
+
+        num_jitters: numero de transformaciones que dlib promedia. 1 en
+            reconocimiento (coste), mas alto en registro (calidad de la
+            plantilla de referencia, que se calcula una sola vez).
         """
+        if num_jitters is None:
+            num_jitters = JITTERS_RECONOCIMIENTO
+
         x, y, x2, y2 = bbox
 
         # Preprocesar: normalizar iluminación del rostro
@@ -54,35 +112,88 @@ class ReconocedorFacial:
         ubicacion = [(y, x2, y2, x)]
 
         encodings = face_recognition.face_encodings(
-            imagen_mejorada, ubicacion, model="large"
+            imagen_mejorada, ubicacion, num_jitters=num_jitters, model="large"
         )
 
         if encodings:
             return encodings[0]
         return None
 
-    def buscar(self, embedding):
-        """Busca en la caché. Retorna (nombre, confianza, usuario_id)."""
-        mejor_dist = float("inf")
-        mejor_nombre = None
-        mejor_id = None
-        emb = np.array(embedding)
+    # ------------------------------------------------------------------
+    # Matching
+    # ------------------------------------------------------------------
 
-        for item in self.cache:
-            dist = np.linalg.norm(emb - item["embedding"])
-            if dist < TOLERANCIA_FACIAL and dist < mejor_dist:
-                mejor_dist = dist
-                mejor_nombre = item["nombre"]
-                mejor_id = item["id"]
+    def buscar(self, embedding, pose=None):
+        """
+        Busca la identidad del embedding en la cache.
 
-        if mejor_nombre:
-            return mejor_nombre, round(1 - mejor_dist, 4), mejor_id
+        Args:
+            embedding: vector 128D consultado.
+            pose: direccion detectada ("frontal", "izquierda", ...) o None.
+                Si se indica, las plantillas registradas en otro angulo
+                reciben una penalizacion pequena.
 
-        return None, 0.0, None
+        Returns:
+            (nombre, confianza, usuario_id) — (None, 0.0, None) si se rechaza.
+        """
+        if self._matriz.shape[0] == 0:
+            return None, 0.0, None
+
+        emb = np.asarray(embedding, dtype=np.float64)
+
+        # Distancias a todas las plantillas de una vez.
+        # El bucle Python anterior recorria cada entrada de la cache; con
+        # cientos de usuarios eso se ejecutaba cada COOLDOWN_EMBEDDING y por
+        # persona en el frame.
+        distancias = np.linalg.norm(self._matriz - emb, axis=1)
+
+        # Pista suave de pose: penaliza comparar un rostro frontal contra
+        # la plantilla de "arriba", que puede dar un falso minimo.
+        if pose and PENALIZACION_POSE > 0:
+            distintas = self._angulos != pose
+            distancias = distancias + PENALIZACION_POSE * distintas
+
+        # Mejor plantilla de cada identidad
+        n_identidades = len(self._identidades)
+        por_identidad = np.full(n_identidades, np.inf)
+        np.minimum.at(por_identidad, self._idx_identidad, distancias)
+
+        orden = np.argsort(por_identidad)
+        mejor = int(orden[0])
+        d1 = float(por_identidad[mejor])
+
+        # Distancia de la mejor identidad DISTINTA (inf si solo hay una)
+        d2 = float(por_identidad[orden[1]]) if n_identidades > 1 else float("inf")
+
+        if d1 >= TOLERANCIA_FACIAL:
+            return None, 0.0, None
+
+        # Test de margen: si otra persona esta casi igual de cerca, es un
+        # empate y no una identificacion.
+        if (d2 - d1) < MARGEN_IDENTIDAD:
+            return None, 0.0, None
+
+        usuario_id, nombre = self._identidades[mejor]
+        return nombre, calibrar_confianza(d1), usuario_id
+
+    # ------------------------------------------------------------------
+    # Cache
+    # ------------------------------------------------------------------
 
     def cargar_cache(self, usuarios):
-        """Carga embeddings de usuarios a memoria."""
+        """
+        Carga embeddings de usuarios a memoria (lista + matrices).
+
+        El angulo de cada plantilla se toma de `usuario["angulos"]` si viene,
+        y si no del orden de captura: el registro recorre ANGULOS_REGISTRO en
+        secuencia, asi que embeddings[i] corresponde a ANGULOS_REGISTRO[i].
+        """
         self.cache = []
+        self._identidades = []
+
+        filas = []
+        angulos = []
+        idx_identidad = []
 
         for usuario in usuarios:
             if "embeddings" in usuario:
@@ -92,16 +203,44 @@ class ReconocedorFacial:
             else:
                 continue
 
-            for emb in lista:
+            if not lista:
+                continue
+
+            etiquetas = usuario.get("angulos") or []
+            idx = len(self._identidades)
+            self._identidades.append((usuario.get("id"), usuario["nombre"]))
+
+            for i, emb in enumerate(lista):
+                if i < len(etiquetas):
+                    angulo = etiquetas[i]
+                elif i < len(ANGULOS_REGISTRO):
+                    angulo = ANGULOS_REGISTRO[i]
+                else:
+                    angulo = None
+
+                vector = np.asarray(emb, dtype=np.float64)
+                filas.append(vector)
+                angulos.append(angulo)
+                idx_identidad.append(idx)
+
                 self.cache.append({
                     "id": usuario.get("id"),
                     "nombre": usuario["nombre"],
-                    "embedding": np.array(emb)
+                    "embedding": vector,
+                    "angulo": angulo,
                 })
 
-        print(f"    Caché: {len(self.cache)} embeddings")
+        if filas:
+            self._matriz = np.vstack(filas)
+            self._angulos = np.array(angulos, dtype=object)
+            self._idx_identidad = np.array(idx_identidad, dtype=np.int64)
+        else:
+            self._matriz = np.zeros((0, 128), dtype=np.float64)
+            self._angulos = np.zeros(0, dtype=object)
+            self._idx_identidad = np.zeros(0, dtype=np.int64)
+
+        print(f"    Caché: {len(self.cache)} embeddings / {len(self._identidades)} usuarios")
 
     def recargar_cache(self, usuarios):
         """Alias para actualizar después de registrar."""
         self.cargar_cache(usuarios)
-

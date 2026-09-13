@@ -17,16 +17,25 @@ import threading
 
 from motor_ia.camara.factory import crear_camara
 from motor_ia.deteccion.face_mesh import DetectorFaceMesh
+from motor_ia.tracking import (
+    PersonaTrack, asociar_detecciones, escalar_bbox, persona_mas_grande,
+    prioridad_reconocimiento,
+)
 from motor_ia.antispoofing.verificador_3d import VerificadorAntiSpoofing
 from motor_ia.reconocimiento.embedding_generator import ReconocedorFacial
 from motor_ia.visualizacion import dibujar_preview, mostrar_preview
-from motor_ia.estado_registro import ANGULOS_REGISTRO
-from motor_ia.validacion_calidad import validar_calidad_rostro
+from motor_ia.validacion_calidad import (
+    validar_calidad_rostro, apta_para_reconocimiento,
+    pose_apta_para_reconocimiento,
+)
 from backend.supabase_cliente import obtener_cliente
 from backend.snapshot_uploader import subir_snapshot
 from config.settings import (
-    COOLDOWN_EMBEDDING, COOLDOWN_ANTISPOOFING,
-    CAPTURAS_DIR
+    COOLDOWN_EMBEDDING, COOLDOWN_EMBEDDING_VOTACION, COOLDOWN_ANTISPOOFING,
+    CAPTURAS_DIR,
+    MAX_YAW_RECONOCIMIENTO, MAX_PITCH_RECONOCIMIENTO,
+    MAX_EMBEDDINGS_POR_FRAME,
+    JITTERS_REGISTRO,
 )
 
 # FPS objetivo para el pipeline (evita consumir 100% CPU)
@@ -45,121 +54,32 @@ SNAPSHOT_INTERVAL = 2.0
 # Evento global para forzar recarga de caché desde otros hilos
 cache_invalidada = threading.Event()
 
-# Timeout para considerar que una persona se fue (segundos)
-_SESION_TIMEOUT = 30
+# Ancho al que se reduce el frame para detectar. El embedding NO usa este
+# frame: se recorta del original a resolucion nativa (ver escalar_bbox).
+ANCHO_DETECCION = 640
+
+# Cuando un frame no pasa los gates de pose/calidad no se gasta el cooldown
+# completo: se reintenta pronto, porque la persona puede corregir la pose
+# en unas decimas de segundo.
+REINTENTO_GATE = 0.3
 
 
-# ======================================================================
-# PersonaTrack: estado independiente por cada persona detectada
-# ======================================================================
-
-class PersonaTrack:
-    """Estado de seguimiento para una persona individual en el frame."""
-
-    def __init__(self, bbox, angulo, direccion):
-        # Posición actual
-        self.bbox = bbox
-        self.angulo = angulo
-        self.direccion = direccion
-
-        # Anti-spoofing
-        self.spoofing_cache = None   # (es_real, es_dist, motivo, metricas)
-        self.t_spoofing = 0
-
-        # Reconocimiento
-        self.nombre = None
-        self.confianza = 0
-        self.usuario_id = None
-        self.t_embedding = 0
-
-        # Sesión (evitar eventos repetidos)
-        self.sesion_tipo = None      # "ACCESO_PERMITIDO", "DESCONOCIDO", "FRAUDE"
-        self.sesion_sujeto = None
-
-        # Tracking
-        self.ultimo_visto = time.time()
-        self.id = id(self)  # Identificador único del track
-
-    def centroide(self):
-        """Retorna (cx, cy) del centro del bbox."""
-        x, y, x2, y2 = self.bbox
-        return ((x + x2) / 2, (y + y2) / 2)
-
-    def actualizar_posicion(self, bbox, angulo, direccion):
-        """Actualiza la posición del track con la nueva detección."""
-        self.bbox = bbox
-        self.angulo = angulo
-        self.direccion = direccion
-        self.ultimo_visto = time.time()
-
-    def esta_activo(self, ahora):
-        """Retorna True si el track sigue activo (no ha expirado)."""
-        return (ahora - self.ultimo_visto) < _SESION_TIMEOUT
-
-    def to_vis_dict(self):
-        """Convierte el track a dict para visualización."""
-        es_real = True
-        es_dist = False
-        motivo = ""
-        metricas = {}
-
-        if self.spoofing_cache:
-            es_real, es_dist, motivo, metricas = self.spoofing_cache
-
-        return {
-            "bbox": self.bbox,
-            "es_real": es_real,
-            "es_dist": es_dist,
-            "motivo": motivo,
-            "metricas": metricas,
-            "nombre": self.nombre,
-            "confianza": self.confianza,
-        }
-
-
-def _distancia_centroides(bbox_a, bbox_b):
-    """Distancia euclidiana entre los centroides de dos bboxes."""
-    cx_a = (bbox_a[0] + bbox_a[2]) / 2
-    cy_a = (bbox_a[1] + bbox_a[3]) / 2
-    cx_b = (bbox_b[0] + bbox_b[2]) / 2
-    cy_b = (bbox_b[1] + bbox_b[3]) / 2
-    return ((cx_a - cx_b) ** 2 + (cy_a - cy_b) ** 2) ** 0.5
-
-
-def _asociar_detecciones(tracks, detecciones, umbral=120):
+def _preparar_crop(imagen_rgb, bbox, color_full, escala_full, rgb_full):
     """
-    Asocia detecciones nuevas con tracks existentes por distancia de centroide.
-    
-    Retorna lista de (track_o_None, bbox, angulo, direccion).
-    track=None significa detección nueva (persona que acaba de aparecer).
+    Elige de qué imagen recortar el rostro para el embedding.
+
+    Retorna (imagen, bbox, rgb_full). `rgb_full` es una caché por frame:
+    convertir el frame nativo a RGB solo merece la pena si de verdad se va
+    a generar un embedding, y solo una vez aunque haya varias personas.
     """
-    if not tracks:
-        # Sin tracks: todas son detecciones nuevas
-        return [(None, bbox, ang, dir) for bbox, ang, dir in detecciones]
+    if escala_full <= 1.0:
+        return imagen_rgb, bbox, rgb_full
 
-    usados = set()
-    resultado = []
+    if rgb_full is None:
+        rgb_full = cv2.cvtColor(color_full, cv2.COLOR_BGR2RGB)
 
-    for det in detecciones:
-        bbox_det, angulo, direccion = det
-        mejor_dist = umbral
-        mejor_track = None
-
-        for track in tracks:
-            if track.id in usados:
-                continue
-            dist = _distancia_centroides(track.bbox, bbox_det)
-            if dist < mejor_dist:
-                mejor_dist = dist
-                mejor_track = track
-
-        if mejor_track is not None:
-            usados.add(mejor_track.id)
-
-        # track=None si no se encontró match (persona nueva)
-        resultado.append((mejor_track, bbox_det, angulo, direccion))
-
-    return resultado
+    alto_f, ancho_f = rgb_full.shape[:2]
+    return rgb_full, escalar_bbox(bbox, escala_full, ancho_f, alto_f), rgb_full
 
 
 def _guardar_foto(imagen, prefijo):
@@ -205,7 +125,7 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
 
     # Crear componentes
     camara = crear_camara()
-    detector = DetectorFaceMesh(max_rostros=5)
+    detector = DetectorFaceMesh(max_rostros=5, confianza=0.5)
     antispoofing = VerificadorAntiSpoofing()
     reconocedor = ReconocedorFacial()
 
@@ -260,16 +180,27 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
 
             ahora = time.time()
 
-            # Redimensionar si la cámara entregó un frame más grande que 640x480
+            # Reducir a ANCHO_DETECCION para detectar/visualizar, pero
+            # CONSERVAR el frame original: el embedding se recorta de ahí.
             h_orig, w_orig = color.shape[:2]
-            if w_orig > 640:
-                scale = 640 / w_orig
+            color_full = color
+            escala_full = 1.0
+            if w_orig > ANCHO_DETECCION:
+                scale = ANCHO_DETECCION / w_orig
                 new_h = int(h_orig * scale)
-                color = cv2.resize(color, (640, new_h), interpolation=cv2.INTER_AREA)
+                color = cv2.resize(color, (ANCHO_DETECCION, new_h),
+                                   interpolation=cv2.INTER_AREA)
+                escala_full = w_orig / float(ANCHO_DETECCION)
                 if profundidad is not None:
-                    profundidad = cv2.resize(profundidad, (640, new_h), interpolation=cv2.INTER_NEAREST)
+                    profundidad = cv2.resize(profundidad, (ANCHO_DETECCION, new_h),
+                                             interpolation=cv2.INTER_NEAREST)
 
             imagen_rgb = cv2.cvtColor(color, cv2.COLOR_BGR2RGB)
+
+            # Conversión del frame full-res: cara (a resolución nativa), así
+            # que se hace una sola vez por frame y solo si algún rostro
+            # llega realmente a generar un embedding.
+            rgb_full = None
 
             # === DETECCIÓN (cada frame) — retorna lista de rostros ===
             detecciones = detector.detectar(imagen_rgb)
@@ -300,20 +231,28 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                 continue
 
             # === ASOCIAR detecciones con tracks existentes ===
-            matched = _asociar_detecciones(tracks_activos, detecciones)
+            matched = asociar_detecciones(tracks_activos, detecciones)
+
+            # Reparto del presupuesto de embeddings del frame: primero quien
+            # falta por identificar, y el más cercano de ellos.
+            matched.sort(key=prioridad_reconocimiento)
+            embeddings_restantes = MAX_EMBEDDINGS_POR_FRAME
 
             tracks_frame = []  # Tracks para este frame
 
-            for match in matched:
-                track_existente, bbox, angulo, direccion = match
+            for track_existente, rostro in matched:
+                bbox = rostro.bbox
+                angulo = rostro.angulo_h
+                angulo_v = rostro.angulo_v
+                direccion = rostro.direccion
 
                 if track_existente is not None:
                     # Track existente: actualizar posición
-                    track_existente.actualizar_posicion(bbox, angulo, direccion)
+                    track_existente.actualizar_posicion(bbox, angulo, direccion, angulo_v)
                     track = track_existente
                 else:
                     # Nuevo track
-                    track = PersonaTrack(bbox, angulo, direccion)
+                    track = PersonaTrack(bbox, angulo, direccion, angulo_v)
                     tracks_activos.append(track)
 
                 # Si cámara simulada: generar profundidad a partir del bbox
@@ -324,7 +263,7 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                 # === MODO REGISTRO (solo la persona más grande/cercana) ===
                 if modo_registro.activo:
                     # Solo procesar la persona con el bbox más grande (más cercana)
-                    if track == _persona_mas_grande(tracks_activos):
+                    if track == persona_mas_grande(tracks_activos):
                         es_real_reg = True
                         if track.spoofing_cache:
                             es_real_reg = track.spoofing_cache[0]
@@ -379,7 +318,16 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                                     tracks_frame.append(track_dict)
                                     continue
 
-                                embedding = reconocedor.generar_embedding(imagen_rgb, bbox)
+                                # La plantilla de referencia se genera del
+                                # frame nativo y con mas jitters: ocurre una
+                                # sola vez por angulo, asi que la calidad
+                                # importa mas que el coste.
+                                img_emb, bbox_emb, rgb_full = _preparar_crop(
+                                    imagen_rgb, bbox, color_full, escala_full, rgb_full
+                                )
+                                embedding = reconocedor.generar_embedding(
+                                    img_emb, bbox_emb, num_jitters=JITTERS_REGISTRO
+                                )
                                 if embedding is not None:
                                     modo_registro.registrar_captura(embedding, angulo_solicitado)
                                     _reg_captura_flash = ahora
@@ -444,47 +392,93 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                 elif es_dist:
                     pass  # Solo se muestra en preview
 
-                # === RECONOCIMIENTO (cada COOLDOWN_EMBEDDING por persona) ===
-                elif ahora - track.t_embedding >= COOLDOWN_EMBEDDING:
-                    track.t_embedding = ahora
+                # === RECONOCIMIENTO (con gates + votacion temporal) ===
+                elif ahora >= track.t_proximo_embedding and embeddings_restantes > 0:
 
-                    embedding = reconocedor.generar_embedding(imagen_rgb, bbox)
-                    if embedding is not None:
-                        nombre, confianza, usuario_id = reconocedor.buscar(embedding)
-                        track.nombre = nombre
-                        track.confianza = confianza
-                        track.usuario_id = usuario_id
+                    # --- Gate de pose ---
+                    # Un rostro muy girado produce un embedding que no se
+                    # parece a ninguna plantilla o, peor, se parece a la de
+                    # otra persona. Mejor no opinar que opinar mal.
+                    pose_ok, motivo_pose = pose_apta_para_reconocimiento(
+                        angulo, angulo_v,
+                        MAX_YAW_RECONOCIMIENTO, MAX_PITCH_RECONOCIMIENTO
+                    )
 
-                        if nombre:
-                            es_nuevo = (
-                                track.sesion_tipo != "ACCESO_PERMITIDO" or
-                                track.sesion_sujeto != nombre
+                    # --- Gate de calidad ---
+                    # Se evalua sobre el frame REDUCIDO a proposito: asi los
+                    # umbrales en pixeles significan lo mismo con cualquier
+                    # camara, independientemente de su resolucion nativa.
+                    calidad_ok, motivo_calidad = True, ""
+                    if pose_ok:
+                        calidad_ok, motivo_calidad = apta_para_reconocimiento(
+                            imagen_rgb, bbox
+                        )
+
+                    if not (pose_ok and calidad_ok):
+                        # Frame no apto: no se vota (no contamina la ventana)
+                        # y se reintenta enseguida, no al cabo del cooldown.
+                        track.motivo_gate = motivo_pose or motivo_calidad
+                        track.t_proximo_embedding = ahora + REINTENTO_GATE
+                    else:
+                        track.motivo_gate = ""
+
+                        img_emb, bbox_emb, rgb_full = _preparar_crop(
+                            imagen_rgb, bbox, color_full, escala_full, rgb_full
+                        )
+                        embeddings_restantes -= 1
+                        embedding = reconocedor.generar_embedding(img_emb, bbox_emb)
+
+                        if embedding is not None:
+                            nombre, confianza, usuario_id = reconocedor.buscar(
+                                embedding, pose=direccion
                             )
-                            if es_nuevo:
-                                track.sesion_tipo = "ACCESO_PERMITIDO"
-                                track.sesion_sujeto = nombre
-                                ruta = _guardar_foto(color, "acceso")
-                                cola_eventos.put({
-                                    "tipo": "ACCESO_PERMITIDO",
-                                    "nombre": nombre,
-                                    "usuario_id": usuario_id,
-                                    "confianza": confianza,
-                                    "metricas": metricas,
-                                    "foto_ruta": ruta,
-                                    "frame": color.copy()
-                                })
-                        else:
-                            if track.sesion_tipo != "DESCONOCIDO":
-                                track.sesion_tipo = "DESCONOCIDO"
-                                track.sesion_sujeto = None
-                                track.usuario_id = None
-                                ruta = _guardar_foto(color, "desconocido")
-                                cola_eventos.put({
-                                    "tipo": "DESCONOCIDO",
-                                    "metricas": metricas,
-                                    "foto_ruta": ruta,
-                                    "frame": color.copy()
-                                })
+
+                            # Un solo embedding no decide: vota.
+                            track.registrar_voto(usuario_id, nombre, confianza)
+                            hay_veredicto, uid_v, nombre_v, conf_v = track.veredicto()
+
+                            if hay_veredicto:
+                                track.nombre = nombre_v
+                                track.confianza = conf_v
+                                track.usuario_id = uid_v
+
+                                if nombre_v:
+                                    es_nuevo = (
+                                        track.sesion_tipo != "ACCESO_PERMITIDO" or
+                                        track.sesion_sujeto != uid_v
+                                    )
+                                    if es_nuevo:
+                                        track.sesion_tipo = "ACCESO_PERMITIDO"
+                                        track.sesion_sujeto = uid_v
+                                        ruta = _guardar_foto(color, "acceso")
+                                        cola_eventos.put({
+                                            "tipo": "ACCESO_PERMITIDO",
+                                            "nombre": nombre_v,
+                                            "usuario_id": uid_v,
+                                            "confianza": conf_v,
+                                            "metricas": metricas,
+                                            "foto_ruta": ruta,
+                                            "frame": color.copy()
+                                        })
+                                elif track.sesion_tipo != "DESCONOCIDO":
+                                    track.sesion_tipo = "DESCONOCIDO"
+                                    track.sesion_sujeto = None
+                                    ruta = _guardar_foto(color, "desconocido")
+                                    cola_eventos.put({
+                                        "tipo": "DESCONOCIDO",
+                                        "metricas": metricas,
+                                        "foto_ruta": ruta,
+                                        "frame": color.copy()
+                                    })
+
+                        # Cadencia rapida hasta tener veredicto, lenta despues:
+                        # decidir rapido cuesta CPU, re-confirmar no hace falta
+                        # que sea frecuente.
+                        ya_decidido = track.sesion_tipo in ("ACCESO_PERMITIDO", "DESCONOCIDO")
+                        track.t_proximo_embedding = ahora + (
+                            COOLDOWN_EMBEDDING if ya_decidido
+                            else COOLDOWN_EMBEDDING_VOTACION
+                        )
 
                 tracks_frame.append(track.to_vis_dict())
 
@@ -529,7 +523,8 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                 # Forzar re-reconocimiento sin destruir la sesión
                 # (evita generar eventos duplicados para personas que siguen presentes)
                 for t in tracks_activos:
-                    t.t_embedding = 0  # Forzar re-evaluación inmediata
+                    t.t_proximo_embedding = 0  # Forzar re-evaluación inmediata
+                    t.limpiar_votos()
                     t.nombre = None
                     t.confianza = 0
                 print(f"    Caché recargada (registro): {len(usuarios)} usuarios")
@@ -541,7 +536,8 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                 reconocedor.recargar_cache(usuarios)
                 t_cache_refresh = ahora
                 for t in tracks_activos:
-                    t.t_embedding = 0
+                    t.t_proximo_embedding = 0
+                    t.limpiar_votos()
                     t.nombre = None
                     t.confianza = 0
                 print(f"    Caché recargada (invalidación externa): {len(usuarios)} usuarios")
@@ -552,7 +548,8 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                 usuarios = _cargar_usuarios_supabase()
                 reconocedor.recargar_cache(usuarios)
                 for t in tracks_activos:
-                    t.t_embedding = 0
+                    t.t_proximo_embedding = 0
+                    t.limpiar_votos()
                     t.nombre = None
                     t.confianza = 0
 
@@ -575,13 +572,6 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
         cv2.destroyAllWindows()
         detector.cerrar()
         camara.cerrar()
-
-
-def _persona_mas_grande(tracks):
-    """Retorna el track con el bbox más grande (persona más cercana)."""
-    if not tracks:
-        return None
-    return max(tracks, key=lambda t: (t.bbox[2] - t.bbox[0]) * (t.bbox[3] - t.bbox[1]))
 
 
 def _procesar_registro(track, modo_registro, reconocedor, imagen_rgb, ahora,
