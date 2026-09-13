@@ -14,6 +14,14 @@
 -- si el codigo empieza a pedir algo que no este ahi.
 --
 -- ---------------------------------------------------------------------------
+-- APLICA PRIMERO supabase/rls_correccion_urgente.sql
+-- ---------------------------------------------------------------------------
+-- El proyecto tiene cuatro politicas abiertas al rol `public` (o sea, a
+-- `anon`) que permiten leer y sobrescribir la biometria sin iniciar sesion.
+-- Eso es mas urgente que todo lo de este fichero, y es independiente: aquel
+-- se puede ejecutar hoy sin romper nada.
+--
+-- ---------------------------------------------------------------------------
 -- ANTES DE EJECUTAR — LEE ESTO
 -- ---------------------------------------------------------------------------
 -- 1. Ejecuta en un proyecto de PRUEBAS primero. Estas sentencias activan RLS
@@ -87,9 +95,15 @@ grant select on public.comandos_edge to depthguard_edge;
 grant update (estado, progreso, resultado, updated_at)
   on public.comandos_edge to depthguard_edge;
 
--- Y nada de las tablas prohibidas. Explicito para que quede en el registro:
-revoke all on public.admin from depthguard_edge;
+-- Y nada de las tablas sensibles. Explicito para que quede en el registro.
+-- (Una version anterior revocaba tambien sobre public.admin; esa tabla no
+-- existe —la autenticacion es Supabase Auth— y la sentencia habria hecho
+-- fallar el script.)
 revoke all on public.suscripciones_push from depthguard_edge;
+revoke all on public.notificacion_cooldown from depthguard_edge;
+
+-- Las identidades de administrador viven en auth.users, fuera del esquema
+-- public, asi que PostgREST no las expone y el rol del edge no las alcanza.
 
 
 -- ---------------------------------------------------------------------------
@@ -154,24 +168,31 @@ create policy edge_actualiza_comandos on public.comandos_edge
 -- primera es que solo un administrador autenticado pueda INSERTAR en
 -- `comandos_edge`.
 --
--- Este fichero cubre el EDGE, asi que la politica de insercion depende de
--- como autentique tu frontend y va aqui como plantilla, no como algo que
--- puedas ejecutar tal cual. Ajusta la condicion a tu esquema de admins:
+-- CORRECCION: una version anterior de este fichero proponia comprobar
+-- `public.admin`. Esa tabla NO EXISTE en el proyecto: la autenticacion es
+-- Supabase Auth, y el rol vive en app_metadata.role ("owner" | "admin"),
+-- gestionado por las Edge Functions invite-admin / set-owner / list-admins.
+-- Una politica contra public.admin habria denegado el acceso a todo el mundo.
 --
---   alter table public.comandos_edge enable row level security;
+-- La politica correcta ya existe en el proyecto y es adecuada:
 --
---   drop policy if exists solo_admin_crea_comandos on public.comandos_edge;
---   create policy solo_admin_crea_comandos on public.comandos_edge
---     for insert to authenticated
---     with check (
---       exists (
---         select 1 from public.admin a
---         where a.id = auth.uid()          -- ajusta a tu modelo de admins
---       )
---     );
+--   "Frontend puede insertar comandos"  {authenticated}  INSERT  check(true)
 --
--- COMPROBACION: con la anon key, y con una sesion de usuario no admin, un
--- INSERT en comandos_edge debe FALLAR.
+-- Es decir: solo con sesion iniciada. Y como en este modelo todo usuario
+-- autenticado es administrador, eso equivale a "solo administradores".
+--
+-- Si mas adelante quieres reservarlo al rol owner, la condicion es sobre el
+-- JWT, no sobre ninguna tabla:
+--
+--   with check ((auth.jwt() -> 'app_metadata' ->> 'role') = 'owner')
+--
+-- OJO si lo haces: list-admins trata como "admin" a los usuarios SIN claim de
+-- rol (`u.app_metadata?.role ?? "admin"`), asi que una politica que exija un
+-- rol explicito dejaria fuera a los que no lo tengan asignado.
+--
+-- COMPROBACION: con la anon key y sin sesion, un INSERT en comandos_edge debe
+-- FALLAR. Verificado contra PostgreSQL 16: devuelve
+-- "new row violates row-level security policy".
 
 
 -- ---------------------------------------------------------------------------
@@ -212,15 +233,13 @@ update storage.buckets set public = false where id = 'capturas';
 -- Si haces (2) sin (1), el preview se queda en negro.
 
 -- Quien puede leer las capturas con su propia sesion (no por URL firmada).
--- Ajusta la condicion a tu modelo de administradores.
+-- CORRECCION: aqui tambien se proponia comprobar `public.admin`, que no
+-- existe. Con Supabase Auth basta con exigir sesion iniciada:
 --
 --   drop policy if exists admin_lee_capturas on storage.objects;
 --   create policy admin_lee_capturas on storage.objects
 --     for select to authenticated
---     using (
---       bucket_id = 'capturas'
---       and exists (select 1 from public.admin a where a.id = auth.uid())
---     );
+--     using (bucket_id = 'capturas');
 --
 -- COMPROBACION: pedir la URL publica de una captura debe devolver 400/404, y
 -- la URL firmada debe funcionar hasta que caduque.

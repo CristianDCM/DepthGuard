@@ -110,8 +110,10 @@ STORAGE = [
 # aparece una llamada a una de estas, es un fallo de diseno, no un permiso
 # que anadir.
 TABLAS_PROHIBIDAS = frozenset({
-    "admin",                  # credenciales de administrador
+    "admin",                  # no existe (la auth es Supabase Auth); se deja
+                              # por si alguien la crea alguna vez
     "suscripciones_push",     # endpoints de notificacion de los usuarios
+    "notificacion_cooldown",  # estado interno del envio de notificaciones
 })
 
 
