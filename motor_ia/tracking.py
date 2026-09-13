@@ -56,6 +56,10 @@ class PersonaTrack:
         self.t_proximo_embedding = 0
         # Motivo por el que se saltó el ultimo reconocimiento (pose/calidad)
         self.motivo_gate = ""
+        # Por que NO se reconocio al ultimo embedding, con la distancia. Un
+        # "persona no registrada" sin numero no se puede diagnosticar.
+        self.motivo_no_reconocido = ""
+        self.distancia_mejor = None
 
         # Votación temporal: ventana de las ultimas identificaciones.
         # Un unico embedding no decide la identidad; hacen falta
@@ -143,6 +147,8 @@ class PersonaTrack:
             "nombre": self.nombre,
             "confianza": self.confianza,
             "motivo_gate": self.motivo_gate,
+            "motivo_no_reconocido": self.motivo_no_reconocido,
+            "distancia_mejor": self.distancia_mejor,
             "liveness_estado": self.liveness_estado,
             "liveness_motivo": self.liveness_motivo,
         }

@@ -17,6 +17,7 @@ El matching hace tres cosas que un vecino-mas-cercano simple no hace:
 """
 
 import math
+from collections import namedtuple
 
 import cv2
 import numpy as np
@@ -48,6 +49,14 @@ else:
     _MARGEN = MARGEN_IDENTIDAD
     _ESCALA = ESCALA_CONFIANZA
     _DIMENSIONES = 128
+
+
+# Resultado de consultar un embedding contra la cache. Lleva la distancia y el
+# margen para que un rechazo se pueda diagnosticar en vez de adivinar.
+Coincidencia = namedtuple(
+    "Coincidencia",
+    ["nombre", "confianza", "usuario_id", "distancia", "margen", "motivo"]
+)
 
 
 def calibrar_confianza(distancia, umbral=None, escala=None):
@@ -199,17 +208,38 @@ class ReconocedorFacial:
         """
         Busca la identidad del embedding en la cache.
 
+        Envoltorio de `evaluar` que devuelve solo lo imprescindible, para los
+        sitios a los que el detalle del rechazo no les aporta nada.
+
+        Returns:
+            (nombre, confianza, usuario_id) — (None, 0.0, None) si se rechaza.
+        """
+        r = self.evaluar(embedding, pose)
+        return r.nombre, r.confianza, r.usuario_id
+
+    def evaluar(self, embedding, pose=None):
+        """
+        Como `buscar`, pero explicando POR QUE.
+
+        Existe porque un rechazo sin numero es imposible de diagnosticar: el
+        sistema dice "persona no registrada" y no hay forma de saber si se
+        quedo a un pelo del umbral o lejisimos. Con la distancia a la mano, la
+        diferencia entre "hay que ajustar el umbral" y "esa persona no esta
+        registrada" se ve de un vistazo.
+
         Args:
-            embedding: vector 128D consultado.
+            embedding: vector consultado.
             pose: direccion detectada ("frontal", "izquierda", ...) o None.
                 Si se indica, las plantillas registradas en otro angulo
                 reciben una penalizacion pequena.
 
         Returns:
-            (nombre, confianza, usuario_id) — (None, 0.0, None) si se rechaza.
+            Coincidencia(nombre, confianza, usuario_id, distancia, margen,
+            motivo). `distancia` es a la identidad mas cercana y `margen` la
+            separacion con la segunda; ambos None si la cache esta vacia.
         """
         if self._matriz.shape[0] == 0:
-            return None, 0.0, None
+            return Coincidencia(None, 0.0, None, None, None, "sin plantillas")
 
         emb = np.asarray(embedding, dtype=np.float64)
 
@@ -237,16 +267,26 @@ class ReconocedorFacial:
         # Distancia de la mejor identidad DISTINTA (inf si solo hay una)
         d2 = float(por_identidad[orden[1]]) if n_identidades > 1 else float("inf")
 
+        margen = None if d2 == float("inf") else d2 - d1
+
         if d1 >= _TOLERANCIA:
-            return None, 0.0, None
+            return Coincidencia(
+                None, 0.0, None, d1, margen,
+                f"lejos: {d1:.3f} >= umbral {_TOLERANCIA:.3f}"
+            )
 
         # Test de margen: si otra persona esta casi igual de cerca, es un
         # empate y no una identificacion.
-        if (d2 - d1) < _MARGEN:
-            return None, 0.0, None
+        if margen is not None and margen < _MARGEN:
+            return Coincidencia(
+                None, 0.0, None, d1, margen,
+                f"empate: segunda a {margen:.3f}, margen minimo {_MARGEN:.3f}"
+            )
 
         usuario_id, nombre = self._identidades[mejor]
-        return nombre, calibrar_confianza(d1), usuario_id
+        return Coincidencia(
+            nombre, calibrar_confianza(d1), usuario_id, d1, margen, ""
+        )
 
     # ------------------------------------------------------------------
     # Cache

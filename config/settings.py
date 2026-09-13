@@ -205,11 +205,34 @@ ONNX_HILOS = int(_env.get("ONNX_HILOS", "0"))
 # por  euclidea = sqrt(2 * (1 - coseno)).  Por eso el matching no cambia: mide
 # la misma distancia euclidea, solo con otros umbrales.
 #
-# 1.095 equivale a exigir coseno >= 0.40. Es una eleccion razonable para
-# control de acceso (prioriza no dejar pasar a un desconocido sobre no molestar
-# al usuario legitimo), pero NO esta calibrada con rostros reales. Usa
-# scripts/calibrar_umbral.py con los usuarios ya registrados y ajustala.
-TOLERANCIA_FACIAL_ONNX = float(_env.get("TOLERANCIA_FACIAL_ONNX", "1.095"))
+# 1.20 equivale a exigir similitud coseno >= 0.28.
+#
+# El valor anterior era 1.095 (coseno 0.40) y era DEMASIADO ESTRICTO. Se cambio
+# a partir de medidas sobre un enrolamiento real, no por criterio estetico:
+#
+#   * Las 5 plantillas de un mismo usuario, capturadas en las 5 poses del
+#     registro y con los filtros de calidad en verde, distan entre si 0.42 a
+#     0.857 (media 0.716). La pose mas aislada tiene su vecina mas cercana a
+#     0.723. Esa dispersion es variacion de pose legitima, no plantillas malas:
+#     se comprobo que ninguna es un caso atipico.
+#   * A eso se suma, en cada frame, el jitter de los landmarks del detector
+#     (mediana 0.14, peor 0.37) y la variacion por luz o enfoque (0.23 a 0.49).
+#
+# Sumando: una pose intermedia con un frame algo desenfocado aterriza sobre
+# 1.09, es decir el 100% del umbral viejo. El sistema quedaba justo en el borde,
+# que es el peor sitio posible: funciona casi siempre y falla "en ratos", y cada
+# fallo declaraba "persona no registrada" a un usuario legitimo.
+#
+# 1.20 deja margen por encima de esa suma y sigue dentro del rango de operacion
+# habitual de los modelos ArcFace (coseno 0.28 a 0.36 en verificacion); 1.095
+# estaba en el extremo estricto de ese rango.
+#
+# LIMITE DE ESTA JUSTIFICACION: solo cubre el lado de NO reconocer a quien si
+# debe pasar. El otro lado —confundir a dos personas— no se puede medir con un
+# unico usuario registrado, porque no hay ninguna distancia "entre personas
+# distintas" que mirar. Con dos o mas usuarios,
+# scripts/calibrar_umbral.py da ese numero y este valor debe revisarse con el.
+TOLERANCIA_FACIAL_ONNX = float(_env.get("TOLERANCIA_FACIAL_ONNX", "1.20"))
 MARGEN_IDENTIDAD_ONNX = float(_env.get("MARGEN_IDENTIDAD_ONNX", "0.10"))
 ESCALA_CONFIANZA_ONNX = float(_env.get("ESCALA_CONFIANZA_ONNX", "0.12"))
 
