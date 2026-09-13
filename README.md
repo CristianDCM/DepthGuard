@@ -103,6 +103,7 @@ DepthGuard/
 │   └── settings.py            # Configuración (.env)
 ├── motor_ia/
 │   ├── pipeline.py            # Orquestador principal
+│   ├── tracking.py            # Tracking IoU + votación temporal por persona
 │   ├── visualizacion.py       # Preview de debug
 │   ├── estado_registro.py     # Estado thread-safe del registro
 │   ├── camara/                # Factory: simulada / realsense
