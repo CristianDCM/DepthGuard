@@ -151,6 +151,25 @@ LIVENESS_TEXTURA_BLOQUEA = _env.get("LIVENESS_TEXTURA_BLOQUEA", "false").lower()
 LIVENESS_MOIRE_MAX = float(_env.get("LIVENESS_MOIRE_MAX", "0.35"))
 LIVENESS_ESPECULAR_MAX = float(_env.get("LIVENESS_ESPECULAR_MAX", "0.08"))
 
+# === PREVIEW LOCAL Y DIAGNOSTICO ===
+
+# Ventana de OpenCV en la maquina del edge (cv2.imshow).
+#
+# Es una comodidad de depuracion, NO la vista de produccion: esa es el stream
+# WebRTC. Pero se dibuja dentro del bucle del pipeline, asi que su coste —y
+# cualquier cosa que el sistema operativo haga con esa ventana— sale del
+# presupuesto de tiempo de cada frame. Si el stream en vivo se ralentiza al
+# minimizarla o moverla, ponlo en false: el sistema funciona igual y la ventana
+# deja de poder afectarle.
+MOSTRAR_PREVIEW = _env.get("MOSTRAR_PREVIEW", "true").lower() == "true"
+
+# Informe de rendimiento cada 3 segundos: FPS reales y en que se va el tiempo
+# de cada frame (captura, deteccion, embeddings, preview, webrtc, espera).
+# Sirve para saber QUE se ralentiza en vez de suponerlo. Apagado por defecto
+# porque escribe una linea cada 3 s.
+DIAGNOSTICO_RENDIMIENTO = _env.get("DIAGNOSTICO_RENDIMIENTO", "false").lower() == "true"
+
+
 # === MOTOR DE EMBEDDINGS ===
 #
 # "dlib" = face_recognition, 128 dimensiones. Lo historico.
