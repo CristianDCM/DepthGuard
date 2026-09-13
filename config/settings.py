@@ -38,7 +38,32 @@ MODO_CAMARA = _env.get("MODO_CAMARA", "simulada")
 
 # === SUPABASE ===
 SUPABASE_URL = _env.get("SUPABASE_URL", "")
+
+# Clave de DISPOSITIVO, restringida por RLS. Es la que debe usarse.
+# Se genera una sola vez siguiendo supabase/rls_edge.sql y solo puede hacer
+# lo que declara backend/privilegios.py.
+SUPABASE_EDGE_KEY = _env.get("SUPABASE_EDGE_KEY", "")
+
+# Clave publica (anon). Sin privilegios: sirve para la senalizacion WebRTC,
+# que es un canal Broadcast y no necesita tocar ninguna tabla.
+SUPABASE_ANON_KEY = _env.get("SUPABASE_ANON_KEY", "")
+
+# LEGADO. La service_role key SALTA TODA LA RLS por diseno: quien lea el .env
+# de esta maquina obtiene control total del proyecto, incluidas todas las
+# plantillas biometricas. Solo se usa si no hay SUPABASE_EDGE_KEY, y el
+# arranque lo avisa. Migra en cuanto puedas (supabase/rls_edge.sql).
 SUPABASE_SERVICE_KEY = _env.get("SUPABASE_SERVICE_KEY", "")
+
+# Poner a false para NEGARSE a arrancar con service_role. Es lo correcto en
+# despliegue real; el default es true para no romper instalaciones que aun no
+# han migrado.
+PERMITIR_SERVICE_KEY = _env.get("PERMITIR_SERVICE_KEY", "true").lower() == "true"
+
+# Borrado del historico desde el dispositivo. Un edge comprometido con este
+# permiso puede borrar el rastro de auditoria, asi que con clave restringida
+# esto debe ser false y la retencion la hace pg_cron en la base de datos
+# (ver supabase/rls_edge.sql).
+CLEANUP_EN_EDGE = _env.get("CLEANUP_EN_EDGE", "true").lower() == "true"
 
 # === ANTI-SPOOFING ===
 UMBRAL_VARIANZA = float(_env.get("UMBRAL_VARIANZA", "0.7"))
@@ -145,18 +170,106 @@ VOTOS_REQUERIDOS = int(_env.get("VOTOS_REQUERIDOS", "3"))
 JITTERS_REGISTRO = int(_env.get("JITTERS_REGISTRO", "3"))
 JITTERS_RECONOCIMIENTO = int(_env.get("JITTERS_RECONOCIMIENTO", "1"))
 
-# === ADMIN (seed inicial) ===
-ADMIN_USUARIO = _env.get("ADMIN_USUARIO", "admin")
-ADMIN_PASSWORD = _env.get("ADMIN_PASSWORD", "admin123")
+# === AUTORIZACION DE REGISTRO BIOMETRICO (hallazgo C4) ===
+#
+# Sobrescribir la biometria de alguien que YA la tiene es el vector de
+# suplantacion: quien pueda escribir en `comandos_edge` apuntaria al
+# usuario_id de un administrador y enrolaria su propia cara. Por eso el
+# re-enrolamiento exige autorizacion explicita.
+#
+# Sin firma HMAC, esta config LOCAL del dispositivo es lo unico que el
+# atacante no controla (el flag del comando si lo controla). Dejala en false
+# y ponla en true solo el rato que dure un re-enrolamiento legitimo.
+PERMITIR_REENROLAMIENTO = _env.get("PERMITIR_REENROLAMIENTO", "false").lower() == "true"
+
+# Secreto compartido para verificar comandos firmados. Vacio = sin firma.
+# La firma debe generarse EN SERVIDOR (Edge Function de Supabase o backend de
+# administracion), nunca en el navegador: un secreto en una SPA no es secreto.
+# Ver backend/autorizacion_registro.py para el formato del mensaje firmado.
+REGISTRO_HMAC_SECRET = _env.get("REGISTRO_HMAC_SECRET", "")
+
+# === ADMIN ===
+#
+# AQUI NO HAY CREDENCIALES DE ADMINISTRADOR, A PROPOSITO.
+#
+# Habia ADMIN_USUARIO / ADMIN_PASSWORD con los valores por defecto
+# admin / admin123. Tres problemas a la vez:
+#   1. Esa contrasena estaba publicada en el README de un repositorio publico,
+#      asi que no era un valor por defecto: era una credencial conocida.
+#   2. Si faltaba el .env, settings.py caia a ella en silencio.
+#   3. Ningun codigo del edge las usaba. La autenticacion de administradores
+#      vive en el frontend / Supabase, no aqui.
+#
+# El edge es un nodo de camara: no debe guardar credenciales de admin, igual
+# que no debe llevar la service_role key. La tabla `admin` esta en
+# TABLAS_PROHIBIDAS (backend/privilegios.py) precisamente por eso.
+#
+# Si tu .env todavia las tiene, el informe de postura de seguridad del
+# arranque te lo dira (backend/postura_seguridad.py).
+
+
+# === MODO PRODUCCION ===
+#
+# Con true, cualquier hallazgo CRITICO o ALTO del informe de postura ABORTA el
+# arranque en vez de imprimir un aviso que nadie lee. Ponlo en true en el
+# despliegue real: es lo que evita que el sistema siga funcionando durante
+# meses con la configuracion de desarrollo.
+MODO_PRODUCCION = _env.get("MODO_PRODUCCION", "false").lower() == "true"
+
+
+def valor_bruto(clave, defecto=""):
+    """
+    Lee una clave del .env tal cual, sin exponer el diccionario entero.
+    Lo usa el informe de postura para detectar ajustes que ya no deberian
+    estar ahi (por ejemplo ADMIN_PASSWORD).
+    """
+    return _env.get(clave, defecto)
 
 # === RUTAS ===
 BASE_DIR = _BASE_DIR
 CAPTURAS_DIR = os.path.join(BASE_DIR, "capturas")
 
+# === SENALIZACION WEBRTC (hallazgo C2) ===
+#
+# El canal de senalizacion es un Broadcast de Supabase Realtime con nombre
+# predecible (webrtc-signaling-entrada_principal). Sin autorizacion, cualquiera
+# que se suscriba puede mandar una oferta SDP y recibir video en vivo de la
+# camara: el edge respondia a toda oferta que llegara.
+#
+# true = canal PRIVADO (Realtime Authorization). Supabase comprueba la RLS de
+# realtime.messages antes de dejar entrar o publicar en el canal, asi que la
+# autorizacion se aplica en el transporte y no depende de que el edge sepa
+# distinguir a quien le habla.
+#
+# Requiere DOS cosas antes de activarlo:
+#   1. Aplicar supabase/rls_realtime.sql (politicas del canal).
+#   2. En el frontend: supabase.realtime.setAuth() y crear el canal con
+#      { config: { private: true } }.
+# Sin (2), el panel deja de recibir video.
+WEBRTC_CANAL_PRIVADO = _env.get("WEBRTC_CANAL_PRIVADO", "false").lower() == "true"
+
+# Tope de conexiones WebRTC simultaneas. Cada una mantiene su propio
+# RTCPeerConnection y su codificador; sin tope, abrir ofertas en bucle agota
+# la memoria y la CPU del nodo.
+WEBRTC_MAX_CONEXIONES = int(_env.get("WEBRTC_MAX_CONEXIONES", "3"))
+
 # === WEBRTC / TURN (Metered) ===
 TURN_URL        = _env.get("TURN_URL", "turn:global.relay.metered.ca:80")
 TURN_USERNAME   = _env.get("TURN_USERNAME", "")
 TURN_CREDENTIAL = _env.get("TURN_CREDENTIAL", "")
+
+# === ALMACENAMIENTO DE CAPTURAS (hallazgo C5) ===
+#
+# false = bucket publico con get_public_url (comportamiento heredado): las
+# fotos faciales de cada acceso y el preview en vivo quedan en URLs sin
+# autenticacion ni caducidad.
+#
+# true = URLs firmadas que caducan. Requiere DOS cosas antes de activarlo:
+#   1. Aplicar supabase/rls_edge.sql (seccion 4) para poner el bucket privado.
+#   2. Que el frontend lea la URL del preview de estado_sistema.camaras en
+#      lugar de construirla a partir del nombre del fichero.
+# Sin (2) el preview en vivo se queda en negro.
+STORAGE_PRIVADO = _env.get("STORAGE_PRIVADO", "false").lower() == "true"
 
 # === RETENCIÓN DE DATOS ===
 DIAS_RETENCION = int(_env.get("DIAS_RETENCION", "30"))

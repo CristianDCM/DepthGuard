@@ -31,7 +31,11 @@ except ImportError:
     WEBRTC_DISPONIBLE = False
     logging.warning("  aiortc no instalado. WebRTC deshabilitado. Usando solo snapshots JPEG.")
 
-from config.settings import TURN_URL, TURN_USERNAME, TURN_CREDENTIAL, SUPABASE_URL, SUPABASE_SERVICE_KEY
+from config.settings import (
+    TURN_URL, TURN_USERNAME, TURN_CREDENTIAL, SUPABASE_URL,
+    WEBRTC_CANAL_PRIVADO, WEBRTC_MAX_CONEXIONES,
+)
+from backend.claves import clave_realtime
 
 # ──────────────────────────────────────────────
 # ICE Servers — STUN gratuito de Google + TURN Metered
@@ -201,13 +205,35 @@ class WebRTCManager:
 
     async def _suscribir_supabase(self):
         """
-        Suscribe al canal Broadcast de Supabase para recibir
-        ofertas SDP y candidatos ICE del frontend.
+        Suscribe al canal de senalizacion para recibir ofertas SDP y
+        candidatos ICE del frontend.
+
+        Con WEBRTC_CANAL_PRIVADO el canal es PRIVADO: Supabase evalua la RLS
+        de realtime.messages antes de dejar entrar o publicar, asi que la
+        autorizacion la aplica el transporte. Es la unica forma de resolverlo:
+        sobre un canal Broadcast que cualquiera puede leer, el edge no puede
+        autenticar a su interlocutor —ni siquiera pidiendole un token, porque
+        un token enviado por broadcast lo leerian todos los suscriptores.
         """
         from supabase import create_async_client
-        supabase = await create_async_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
-        canal = supabase.channel(self._canal_nombre)
+        clave = clave_realtime()
+        supabase = await create_async_client(SUPABASE_URL, clave)
+
+        if WEBRTC_CANAL_PRIVADO:
+            # Necesario para Realtime Authorization: la conexion tiene que
+            # llevar la identidad con la que se evalua la RLS.
+            await supabase.realtime.set_auth(clave)
+            canal = supabase.channel(
+                self._canal_nombre, {"config": {"private": True}}
+            )
+            print(f" WebRTC: canal PRIVADO (autorizacion por RLS)")
+        else:
+            canal = supabase.channel(self._canal_nombre)
+            print(" AVISO DE SEGURIDAD: canal de senalizacion WebRTC PUBLICO.")
+            print("    Cualquiera que se suscriba puede pedir video en vivo.")
+            print("    Aplica supabase/rls_realtime.sql, pon private:true en el")
+            print("    frontend y activa WEBRTC_CANAL_PRIVADO=true.")
 
         def _on_mensaje(payload):
             """Callback síncrono de Supabase — puente a asyncio."""
@@ -249,6 +275,20 @@ class WebRTCManager:
         existing = self._conexiones.get(session_id)
         if existing and existing.connectionState not in ("closed", "failed"):
             logging.info(f" WebRTC: offer duplicada ignorada para {session_id[:8]}")
+            return
+
+        # Tope de conexiones: cada una mantiene su RTCPeerConnection y su
+        # codificador. Sin limite, encadenar ofertas con session_id distintos
+        # agota memoria y CPU del nodo, aunque el canal sea privado.
+        activas = sum(
+            1 for pc in self._conexiones.values()
+            if pc.connectionState not in ("closed", "failed")
+        )
+        if activas >= WEBRTC_MAX_CONEXIONES:
+            logging.warning(
+                f" WebRTC: offer rechazada, {activas} conexiones activas "
+                f"(tope {WEBRTC_MAX_CONEXIONES})"
+            )
             return
 
         # Crear nueva conexión para esta sesión

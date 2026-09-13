@@ -18,6 +18,7 @@ import threading
 import collections
 
 from backend.supabase_cliente import obtener_cliente
+from backend import almacenamiento
 from config.settings import CAPTURAS_DIR
 
 # Buffer local para store-and-forward (tolerancia a cortes de internet)
@@ -28,7 +29,7 @@ _lock_buffer = threading.Lock()
 _REINTENTO_INTERVALO = 10
 
 # Nombre del bucket en Supabase Storage
-_STORAGE_BUCKET = "capturas"
+_STORAGE_BUCKET = almacenamiento.BUCKET
 
 
 def iniciar_sync(cola_eventos: queue.Queue, camera_id: str = "entrada_principal",
@@ -140,17 +141,13 @@ def _subir_foto_si_existe(supabase, registro: dict):
                 file_options={"content-type": "image/jpeg"}
             )
 
-        url_publica = supabase.storage.from_(_STORAGE_BUCKET).get_public_url(
-            nombre_archivo
-        )
-        registro["foto_url"] = url_publica
+        # Con el bucket privado esto es una URL FIRMADA que caduca junto con
+        # la retencion del registro, en lugar de una URL publica eterna.
+        registro["foto_url"] = almacenamiento.url_de(supabase, nombre_archivo)
     except Exception as e:
         # Si el archivo ya existe en Storage (reintento con mismo nombre)
         if "Duplicate" in str(e) or "already exists" in str(e):
-            url_publica = supabase.storage.from_(_STORAGE_BUCKET).get_public_url(
-                nombre_archivo
-            )
-            registro["foto_url"] = url_publica
+            registro["foto_url"] = almacenamiento.url_de(supabase, nombre_archivo)
         else:
             print(f"[Sync] Error subiendo foto a Storage: {e}")
             # Dejar la ruta local; se reintentará con el buffer

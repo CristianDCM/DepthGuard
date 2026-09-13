@@ -17,10 +17,14 @@ import cv2
 import threading
 
 from backend.supabase_cliente import obtener_cliente
+from backend import almacenamiento
 
-# Nombre fijo del archivo en Storage (se sobreescribe cada vez)
-_SNAPSHOT_FILENAME = "live_preview.jpg"
-_STORAGE_BUCKET = "capturas"
+# Nombre fijo del archivo en Storage (se sobreescribe cada vez).
+# Con el bucket privado el nombre deja de importar: no se puede leer sin una
+# URL firmada. La privacidad la da la politica del bucket, no lo dificil que
+# sea adivinar el nombre.
+_SNAPSHOT_FILENAME = almacenamiento.PREVIEW
+_STORAGE_BUCKET = almacenamiento.BUCKET
 
 # Calidad JPEG (0-100). 50 es buen balance entre calidad y tamaño (~25KB)
 _JPEG_QUALITY = 50

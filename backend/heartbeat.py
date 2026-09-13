@@ -15,6 +15,7 @@ import time
 import datetime
 
 from backend.supabase_cliente import obtener_cliente
+from backend import almacenamiento
 from config.settings import TOLERANCIA_FACIAL, UMBRAL_VARIANZA, COOLDOWN_EVENTO
 
 
@@ -37,17 +38,24 @@ _CAMARAS_SISTEMA = [
 
 
 def _construir_camaras(camera_id_activa: str, camera_type: str,
-                       modo_camara: str) -> list:
+                       modo_camara: str, preview_url: str = None) -> list:
     """Construye el array de cámaras marcando la activa correctamente."""
     camaras = []
     for cam in _CAMARAS_SISTEMA:
         if cam["camera_id"] == camera_id_activa:
-            camaras.append({
+            activa = {
                 **cam,
                 "camera_type": camera_type,
                 "activa": True,
                 "modelo": "Intel RealSense" if modo_camara == "realsense" else "Webcam Simulada",
-            })
+            }
+            # URL del preview en vivo. Con el bucket privado el frontend YA NO
+            # puede construirla a partir del nombre del fichero: tiene que
+            # leerla de aquí, porque es una URL firmada que se renueva en cada
+            # heartbeat.
+            if preview_url:
+                activa["preview_url"] = preview_url
+            camaras.append(activa)
         else:
             camaras.append({**cam, "activa": False})
     return camaras
@@ -66,12 +74,16 @@ def iniciar_heartbeat(intervalo: int = 30, camera_id: str = "entrada_principal",
     supabase = obtener_cliente()
     print(f"[Heartbeat] Activo (cada {intervalo}s)")
 
-    # Construir info de cámaras: solo la activa se marca True
-    camaras = _construir_camaras(camera_id, camera_type, modo_camara)
-
     while True:
         try:
             ahora = datetime.datetime.now(datetime.timezone.utc).isoformat()
+
+            # Se reconstruye en cada latido porque la URL firmada del preview
+            # caduca y hay que renovarla.
+            camaras = _construir_camaras(
+                camera_id, camera_type, modo_camara,
+                preview_url=almacenamiento.url_preview(supabase),
+            )
             supabase.table("estado_sistema").update({
                 "ultimo_heartbeat": ahora,
                 "camara_activa": True,
@@ -99,6 +111,7 @@ def apagar_camaras():
 
         # Todas las cámaras inactivas
         camaras_off = [{**cam, "activa": False} for cam in _CAMARAS_SISTEMA]
+        # Sin preview_url: al apagar no debe quedar una URL viva publicada
 
         supabase.table("estado_sistema").update({
             "camara_activa": False,

@@ -30,7 +30,15 @@ Set `MODO_CAMARA` in `.env`:
 | `motor_ia/tracking.py` | `PersonaTrack` (incl. temporal voting + liveness state) + IoU association |
 | `motor_ia/antispoofing/liveness.py` | 2D liveness: blink (EAR) + screen-texture metrics |
 | `motor_ia/camara/factory.py` | Camera factory based on MODO_CAMARA |
-| `backend/supabase_cliente.py` | Supabase client singleton (service_role key) |
+| `backend/supabase_cliente.py` | Supabase client singleton (restricted device key) |
+| `backend/claves.py` | Key-selection policy: restricted key wins, service_role fails closed |
+| `backend/privilegios.py` | Authoritative inventory of every privileged op the edge performs |
+| `backend/autorizacion_registro.py` | Authorizes enrolment commands before the edge writes biometrics |
+| `backend/almacenamiento.py` | Storage access: public vs signed URLs for capture images |
+| `supabase/rls_edge.sql` | Restricted role + RLS policies implementing that inventory |
+| `backend/postura_seguridad.py` | Startup security-posture report; `MODO_PRODUCCION` makes findings fatal |
+| `supabase/rls_correccion_urgente.sql` | Fixes policies opened to `public` — apply first |
+| `supabase/rls_realtime.sql` | Authorization for the WebRTC signalling channel |
 | `backend/supabase_sync.py` | Store-and-forward: queue → Supabase historial |
 | `backend/heartbeat.py` | Updates estado_sistema.ultimo_heartbeat every 30s |
 | `config/settings.py` | Loads `.env`, exports all config vars |
@@ -40,6 +48,152 @@ Set `MODO_CAMARA` in `.env`:
 - Requires Intel RealSense SDK if `MODO_CAMARA=realsense`
 - Requires `.env` file with `SUPABASE_URL` and `SUPABASE_SERVICE_KEY`
 - Supabase tables must be created beforehand (see DISEÑO_SISTEMA.md)
+
+## WebRTC signalling authorization
+
+Signalling runs over a Supabase Realtime Broadcast channel named
+`webrtc-signaling-{camera_id}`, and `camera_id` is a fixed value in the code
+(`entrada_principal` / `entrada_secundaria`) — a predictable name. The edge
+answered **any** offer that arrived, so anyone who could subscribe got a live
+camera feed.
+
+**This cannot be fixed edge-side.** On a Broadcast channel the edge cannot
+authenticate its peer — not even by asking for a token, because a token sent
+over broadcast is delivered to *every* subscriber, leaking the very credential
+you wanted to check. Authorization has to be enforced by the transport.
+
+With `WEBRTC_CANAL_PRIVADO=true` the channel is declared **private**, so
+Supabase evaluates RLS on `realtime.messages` before letting anyone join or
+publish (`supabase/rls_realtime.sql`).
+
+| Variable | What it does |
+|----------|--------------|
+| `WEBRTC_CANAL_PRIVADO` | `true` makes signalling a private, authorized channel |
+| `WEBRTC_MAX_CONEXIONES` | Cap on concurrent peer connections. Each holds its own encoder; without a cap, chaining offers with fresh session ids exhausts CPU and memory even on a private channel |
+
+**Deliberate trade-off:** a private channel needs an identity that satisfies
+the RLS, and the anon key does not. So signalling switches from the anon key
+to the edge key. That is worth it — "nobody unauthorized can even join" beats
+"whoever joins holds fewer table grants" — and the edge key stays bounded by
+its own RLS.
+
+**Frontend side is done** (branch `claude/seguridad-c2-c5` of
+`DepthGuard_Design`), behind `VITE_WEBRTC_CANAL_PRIVADO`. Flip **both** flags
+together — the edge's `WEBRTC_CANAL_PRIVADO` and Vercel's
+`VITE_WEBRTC_CANAL_PRIVADO` — because it is not documented that a private and
+a public client see each other on the same topic, and flipping only one could
+leave the monitor without video.
+
+## Security posture at startup
+
+Every audit fix ships with a setting, and most default to the insecure value so
+existing installs keep working. That leaves an operational risk: the repo is
+fixed while production keeps running the development configuration, because
+nobody reads one warning buried in a hundred lines of log.
+
+`backend/postura_seguridad.py` gathers all of them into one report printed at
+startup, each finding tagged with its audit id (C1, C3, C4, C5, C6), its
+severity and its remedy.
+
+| Variable | What it does |
+|----------|--------------|
+| `MODO_PRODUCCION` | `true` makes any CRITICO or ALTO finding **abort startup** instead of warning. Set it in real deployments — a system that refuses to start gets fixed today; a warning gets ignored for months |
+
+Target configuration for a real deployment is listed at the bottom of
+`.env.example`.
+
+## Capture storage (biometric images)
+
+The `capturas` bucket was public and the code used `get_public_url()`. Face
+photos from every access event, and the live preview frame, sat at URLs with
+**no authentication and no expiry** — the preview at a fixed, guessable path
+refreshed every 2s. These are images of identified people.
+
+All storage access now goes through `backend/almacenamiento.py`, which serves
+either public or **signed, expiring** URLs based on `STORAGE_PRIVADO`.
+`tests/test_privilegios.py` enforces that `get_public_url` appears nowhere else,
+so no code path can quietly bypass that decision.
+
+| Variable | What it does |
+|----------|--------------|
+| `STORAGE_PRIVADO` | `false` (default) keeps the legacy public URLs and warns at startup. `true` issues signed URLs that expire |
+
+Signed URL lifetimes: event photos get `DIAS_RETENCION + 1` days, so a URL
+never expires *before* cleanup deletes its record (which would leave holes in
+the history). The preview gets 1 hour, renewed by every heartbeat.
+
+**Turning it on takes three steps, in this order:**
+
+1. Deploy the frontend that reads `preview_url` from the active camera in
+   `estado_sistema.camaras` — **already done** in branch
+   `claude/seguridad-c2-c5` of `DepthGuard_Design`, with a fallback to the
+   legacy public URL so there is no window without an image. Event photos need
+   **no** frontend change — `historial.foto_url` is still a URL, just signed.
+2. Apply `supabase/rls_edge.sql` section 4 (flips the bucket to private).
+3. Set `STORAGE_PRIVADO=true`.
+
+Doing step 2 before step 1 leaves the live preview blank.
+
+The filename is not a security control and is not treated as one: privacy
+comes from the bucket policy. Once the bucket is private, a guessable path is
+harmless.
+
+## Enrolment authorization
+
+The edge used to enrol biometrics into whatever `usuario_id` a row in
+`comandos_edge` carried, with no validation. Anyone able to insert such a row
+made the edge **overwrite an administrator's face templates with their own** —
+direct impersonation, not privilege escalation.
+
+Every `INICIAR_REGISTRO` command is now authorized before anything is written:
+
+1. The target must **exist and be active** — the edge reads `usuarios` itself
+   rather than trusting the command.
+2. If the command states a `nombre`, it must **match the database**. This stops
+   an attacker disguising "overwrite the admin" as "enrol a new employee": they
+   must use the admin's real name, which then shows in the HUD and the audit
+   record. The DB name is always the authoritative one displayed.
+3. **Re-enrolment is blocked** — overwriting existing templates needs explicit
+   authorization the attacker cannot grant themselves.
+
+| Variable | What it does |
+|----------|--------------|
+| `PERMITIR_REENROLAMIENTO` | Local device config. Without a signature this is the **only** thing an attacker does not control (the command's own flag, they do). Keep it `false`; turn it on only for the duration of a legitimate re-enrolment |
+| `REGISTRO_HMAC_SECRET` | Shared secret for signed commands. Empty = no signature required. Sign **server-side** (a Supabase Edge Function or the admin backend), never in the browser |
+
+The signed message is `tipo|id|usuario_id|nombre|reenrolar` (HMAC-SHA256, hex).
+The command id is inside it, so a valid signature cannot be transplanted onto
+another row; the re-enrolment flag is inside it too, so it cannot be flipped
+after signing.
+
+**Scope, honestly:** this closes an attacker who can write to `comandos_edge`
+but not insert into `usuarios`. One who can do both can create an identity and
+enrol into it — that is cut off by the `usuarios` RLS, not here. And since the
+edge needs the HMAC secret to verify, a compromised *edge* can forge commands;
+the signature protects against a compromised *database*.
+
+## Supabase keys / least privilege
+
+**Do not put the service_role key on the device.** It bypasses ALL RLS by
+design: anyone who reads that machine's `.env` gets full control of the
+project — every user, every biometric template, the whole history, unrestricted
+writes. Nothing the edge does needs that (see `backend/privilegios.py`).
+
+| Variable | What it does |
+|----------|--------------|
+| `SUPABASE_EDGE_KEY` | The device key, restricted by RLS. **Use this.** Generate it with `supabase/rls_edge.sql` |
+| `SUPABASE_ANON_KEY` | Public key, used for the WebRTC signalling channel (Broadcast only — it touches no table) |
+| `SUPABASE_SERVICE_KEY` | Legacy. Only used when no edge key is set, and startup warns loudly |
+| `PERMITIR_SERVICE_KEY` | Set `false` in production: the edge then refuses to start on service_role instead of running with a master key |
+| `CLEANUP_EN_EDGE` | Set `false` with a restricted key. Deleting history is a privilege the device should not hold — a compromised edge could erase the audit trail. Move retention to pg_cron (see the SQL file) |
+
+`tests/test_privilegios.py` scans the code for `.table()` / `.storage` calls
+and fails if any is not declared in `backend/privilegios.py`. Adding a new
+privileged call therefore forces a look at the RLS policies, instead of the
+policies silently falling behind what the code asks for.
+
+Migration is config-only once the SQL is applied: set `SUPABASE_EDGE_KEY`,
+`PERMITIR_SERVICE_KEY=false`, `CLEANUP_EN_EDGE=false`.
 
 ## Liveness / anti-spoofing
 
@@ -106,8 +260,15 @@ Design notes:
 
 ## Admin
 
-- Default: `admin` / `admin123` (from `.env`)
-- Create additional admins: `python scripts/crear_admin.py`
+**No default credentials, deliberately.** This repo used to publish
+`admin` / `admin123`, which made it a known credential rather than a default,
+and `config/settings.py` fell back to it whenever `.env` was missing.
+
+Admin credentials are **not an edge concern** — authentication lives in the
+frontend / Supabase, and no edge code ever read those variables. The `admin`
+table is in `TABLAS_PROHIBIDAS` (`backend/privilegios.py`) for the same reason.
+If `ADMIN_USUARIO` / `ADMIN_PASSWORD` are still in a device's `.env`, the
+startup posture report flags it.
 
 ## Database
 

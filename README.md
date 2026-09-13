@@ -62,8 +62,17 @@ copy .env.example .env  # Windows
 Edita `.env` y agrega tus credenciales de Supabase:
 ```
 SUPABASE_URL=https://tu-proyecto.supabase.co
-SUPABASE_SERVICE_KEY=eyJ...tu-service-role-key...
+SUPABASE_EDGE_KEY=eyJ...clave-de-dispositivo...
+SUPABASE_ANON_KEY=eyJ...clave-publica...
+PERMITIR_SERVICE_KEY=false
+CLEANUP_EN_EDGE=false
 ```
+
+> **Seguridad:** no pongas la `service_role` key en el dispositivo. Salta toda
+> la RLS, así que quien lea ese `.env` obtiene control total del proyecto,
+> incluidas todas las plantillas biométricas. Genera una clave de dispositivo
+> restringida con [`supabase/rls_edge.sql`](supabase/rls_edge.sql). El sistema
+> aún arranca con `service_role` por compatibilidad, pero avisa en cada inicio.
 
 ## Instalación rápida (Windows)
 
@@ -78,6 +87,10 @@ SUPABASE_SERVICE_KEY=eyJ...tu-service-role-key...
 .\venv\Scripts\activate
 python iniciar.py
 ```
+
+Al arrancar imprime un **informe de postura de seguridad** con los ajustes que
+siguen en valores de desarrollo y cómo corregirlos. Con `MODO_PRODUCCION=true`,
+los hallazgos graves **abortan el arranque** en lugar de quedarse en un aviso.
 
 La aplicación inicia tres hilos:
 1. **Pipeline IA** — cámara → detección → anti-spoofing → reconocimiento
@@ -115,8 +128,16 @@ DepthGuard/
 │   ├── deteccion/             # Face Mesh (MediaPipe)
 │   ├── antispoofing/          # Verificación 3D + liveness 2D (parpadeo)
 │   └── reconocimiento/        # Embeddings faciales
+├── supabase/
+│   ├── rls_correccion_urgente.sql # Corrige políticas abiertas a `public`
+│   ├── rls_edge.sql           # Rol restringido + políticas RLS del edge
+│   └── rls_realtime.sql       # Autorización del canal de señalización
 ├── backend/
 │   ├── supabase_cliente.py    # Cliente Supabase (singleton)
+│   ├── claves.py              # Política de selección de clave
+│   ├── privilegios.py         # Inventario de privilegios del edge
+│   ├── autorizacion_registro.py # Autoriza los comandos de enrolamiento
+│   ├── almacenamiento.py      # URLs públicas vs firmadas de capturas
 │   ├── supabase_sync.py       # Store-and-Forward → historial
 │   └── heartbeat.py           # Heartbeat cada 30s
 ├── scripts/
@@ -131,12 +152,19 @@ DepthGuard/
 python scripts/crear_admin.py
 ```
 
-## Admin por defecto
+## Administradores
 
-- **Usuario:** `admin`
-- **Contraseña:** `admin123`
+**No hay usuario ni contraseña por defecto, a propósito.** Este repositorio
+publicaba `admin` / `admin123`, lo que convertía ese valor en una credencial
+conocida por cualquiera que viera el repo.
 
-Cambiar en `.env` (`ADMIN_USUARIO`, `ADMIN_PASSWORD`).
+Las credenciales de administrador **no son cosa del nodo edge**: la
+autenticación vive en el frontend / Supabase. No pongas `ADMIN_USUARIO` ni
+`ADMIN_PASSWORD` en el `.env` del edge — ningún código suyo las usa, y el
+informe de postura del arranque te avisará si siguen ahí.
+
+> Si tu instalación todavía usa `admin123`, **cámbiala ya**: está publicada en
+> el historial de este repositorio.
 
 ## Licencia
 
