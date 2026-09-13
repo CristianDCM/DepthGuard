@@ -51,6 +51,11 @@ TIEMPO_ESTABILIZACION = 1.0
 # Intervalo de recarga automática de caché (segundos)
 CACHE_REFRESH_INTERVAL = 60
 
+# Si la recarga falla no se espera el intervalo completo: se reintenta pronto.
+# Mientras tanto se CONSERVA la cache anterior, que es mejor que quedarse sin
+# plantillas.
+REINTENTO_CACHE = 10
+
 # Intervalo entre snapshots para preview en vivo (segundos)
 SNAPSHOT_INTERVAL = 2.0
 
@@ -191,7 +196,20 @@ def _guardar_foto(imagen, prefijo):
 
 
 def _cargar_usuarios_supabase():
-    """Carga usuarios desde Supabase y los formatea para el reconocedor."""
+    """
+    Carga usuarios desde Supabase y los formatea para el reconocedor.
+
+    Returns:
+        Lista de usuarios, o None si NO SE PUDO cargar.
+
+    La distincion es importante y antes no existia: esta funcion devolvia [] en
+    caso de error, indistinguible de "no hay usuarios registrados". La recarga
+    periodica pasaba ese [] directo a la cache, asi que un corte de red de un
+    segundo —o un 504 del gateway de Supabase, que ocurren— borraba TODAS las
+    plantillas y durante el siguiente minuto no se reconocia a nadie, con el
+    rostro perfectamente visible. Luego la recarga siguiente lo arreglaba solo,
+    asi que el sintoma era intermitente y desconcertante.
+    """
     try:
         supabase = obtener_cliente()
         resp = supabase.table("usuarios").select(
@@ -211,7 +229,7 @@ def _cargar_usuarios_supabase():
         return usuarios
     except Exception as e:
         print(f" Error cargando usuarios de Supabase: {e}")
-        return []
+        return None
 
 
 def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provider=None):
@@ -260,6 +278,10 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
 
     # Cargar usuarios desde Supabase
     usuarios = _cargar_usuarios_supabase()
+    if usuarios is None:
+        print(" No se pudieron cargar los usuarios al arrancar.")
+        print("    NO SE RECONOCERA A NADIE hasta que la recarga funcione.")
+        usuarios = []
     reconocedor.cargar_cache(usuarios)
     print(f"    {len(usuarios)} usuarios cargados desde Supabase")
 
@@ -555,9 +577,20 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                         embedding = plan.embedding
 
                         if embedding is not None:
-                            nombre, confianza, usuario_id = reconocedor.buscar(
+                            coincidencia = reconocedor.evaluar(
                                 embedding, pose=direccion
                             )
+                            nombre = coincidencia.nombre
+                            confianza = coincidencia.confianza
+                            usuario_id = coincidencia.usuario_id
+
+                            # Por que no se reconocio, con el numero. Sin esto,
+                            # un "persona no registrada" es indistinguible de
+                            # un rechazo por un pelo, y no hay forma de saber si
+                            # lo que falta es ajustar el umbral o registrar a
+                            # alguien. Viaja hasta el evento y hasta Supabase.
+                            track.motivo_no_reconocido = coincidencia.motivo
+                            track.distancia_mejor = coincidencia.distancia
 
                             # Un solo embedding no decide: vota.
                             # Decidir la identidad y CONCEDER el acceso son
@@ -570,10 +603,28 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                                 track.confianza = conf_v
                                 track.usuario_id = uid_v
 
-                        # Cadencia rapida hasta tener veredicto, lenta despues:
-                        # decidir rapido cuesta CPU, re-confirmar no hace falta
-                        # que sea frecuente.
-                        ya_decidido = track.sesion_tipo in ("ACCESO_PERMITIDO", "DESCONOCIDO")
+                        # Cadencia rapida mientras no haya un acceso concedido,
+                        # lenta despues.
+                        #
+                        # DESCONOCIDO NO cuenta como decidido, y esto era un
+                        # error de diseno con una consecuencia muy visible: la
+                        # cadencia lenta esta pensada para RE-CONFIRMAR a quien
+                        # ya se identifico, pero se aplicaba igual tras declarar
+                        # "no registrada". Y ese es justo el momento en el que
+                        # hay que volver a mirar CUANTO ANTES, porque puede ser
+                        # un usuario legitimo al que un frame malo le fallo.
+                        #
+                        # El efecto era el sintoma de "en ratos no me reconoce y
+                        # luego de un rato si": para recuperarse hacen falta
+                        # VOTOS_REQUERIDOS aciertos, y a 2 s por voto son 6
+                        # segundos como minimo, mas si algun voto intermedio
+                        # tambien falla. Con la cadencia rapida son menos de 1 s.
+                        #
+                        # El coste esta acotado sin necesidad de mas logica: un
+                        # track ya marcado DESCONOCIDO pierde prioridad frente a
+                        # los aun sin identificar (prioridad_reconocimiento), y
+                        # el numero de embeddings por frame tiene tope.
+                        ya_decidido = track.sesion_tipo == "ACCESO_PERMITIDO"
                         track.t_proximo_embedding = ahora + (
                             COOLDOWN_EMBEDDING if ya_decidido
                             else COOLDOWN_EMBEDDING_VOTACION
@@ -615,6 +666,10 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                             track.sesion_tipo = "DESCONOCIDO"
                             track.sesion_sujeto = None
                             ruta = _guardar_foto(color, "desconocido")
+                            if track.motivo_no_reconocido:
+                                metricas["no_reconocido"] = track.motivo_no_reconocido
+                                print(f"    No reconocido: "
+                                      f"{track.motivo_no_reconocido}")
                             cola_eventos.put({
                                 "tipo": "DESCONOCIDO",
                                 "metricas": metricas,
@@ -686,14 +741,31 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
 
             # Recarga periódica automática cada 60s
             if ahora - t_cache_refresh >= CACHE_REFRESH_INTERVAL:
-                t_cache_refresh = ahora
                 usuarios = _cargar_usuarios_supabase()
-                reconocedor.recargar_cache(usuarios)
-                for t in tracks_activos:
-                    t.t_proximo_embedding = 0
-                    t.limpiar_votos()
-                    t.nombre = None
-                    t.confianza = 0
+
+                if usuarios is None:
+                    # NO se toca la cache: conservar plantillas viejas es mucho
+                    # mejor que quedarse sin ninguna. Se reintenta pronto.
+                    t_cache_refresh = ahora - CACHE_REFRESH_INTERVAL + REINTENTO_CACHE
+                    print(f" Recarga de caché fallida; se conservan "
+                          f"{len(reconocedor.cache)} plantillas. "
+                          f"Reintento en {REINTENTO_CACHE}s.")
+                else:
+                    t_cache_refresh = ahora
+                    huella_antes = reconocedor.huella_cache()
+                    reconocedor.recargar_cache(usuarios)
+
+                    # Solo se reinicia el reconocimiento si las plantillas han
+                    # CAMBIADO de verdad. Hacerlo en cada recarga obligaba a
+                    # todos los presentes a volver a votar desde cero cada 60
+                    # segundos, y durante esa reconquista el preview mostraba
+                    # "Persona no registrada" a gente que si estaba registrada.
+                    if reconocedor.huella_cache() != huella_antes:
+                        for t in tracks_activos:
+                            t.t_proximo_embedding = 0
+                            t.limpiar_votos()
+                            t.nombre = None
+                            t.confianza = 0
 
             # FPS debug (cada 3 segundos)
             _fps_count += 1
