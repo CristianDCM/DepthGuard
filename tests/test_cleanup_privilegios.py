@@ -66,7 +66,9 @@ class _TablaFalsa:
     def eq(self, *a, **k): return self
     def limit(self, *a, **k): return self
 
-    def delete(self):
+    def delete(self, **kwargs):
+        # Acepta returning="minimal" como el cliente real: PostgREST devuelve
+        # la fila borrada por defecto, y eso exige permiso de lectura.
         self._borrando = True
         return self
 

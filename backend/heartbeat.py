@@ -93,7 +93,7 @@ def iniciar_heartbeat(intervalo: int = 30, camera_id: str = "entrada_principal",
                 "umbral_varianza": UMBRAL_VARIANZA,
                 "cooldown_eventos": COOLDOWN_EVENTO,
                 "updated_at": ahora,
-            }).eq("id", 1).execute()
+            }, returning="minimal").eq("id", 1).execute()
         except Exception as e:
             print(f"[Heartbeat] Error: {e}")
 
@@ -117,7 +117,7 @@ def apagar_camaras():
             "camara_activa": False,
             "camaras": camaras_off,
             "updated_at": ahora,
-        }).eq("id", 1).execute()
+        }, returning="minimal").eq("id", 1).execute()
 
         print("[Heartbeat] Cámaras marcadas como inactivas en Supabase")
     except Exception as e:
