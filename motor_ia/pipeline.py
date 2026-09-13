@@ -10,6 +10,7 @@ cada una con su propio estado de sesión independiente.
 import time
 import cv2
 import queue
+from collections import namedtuple
 import datetime
 import os
 import json
@@ -90,6 +91,94 @@ def _preparar_crop(imagen_rgb, bbox, color_full, escala_full, rgb_full,
     puntos_full = None if puntos is None else puntos * escala_full
     return (rgb_full, escalar_bbox(bbox, escala_full, ancho_f, alto_f),
             rgb_full, puntos_full)
+
+
+# Decision por rostro para el frame actual. `embedding` es None cuando no se
+# pudo generar; `motivo_gate` no vacio significa que el rostro no paso los
+# filtros de pose o calidad y no se le saco embedding.
+PlanEmbedding = namedtuple("PlanEmbedding", ["embedding", "motivo_gate"])
+
+
+def _planificar_embeddings(matched, ahora, reconocedor, imagen_rgb, color_full,
+                           escala_full, rgb_full, presupuesto):
+    """
+    Decide de que rostros se saca embedding en ESTE frame, y los saca TODOS
+    en una sola pasada.
+
+    Existe para que los N rostros de un frame vayan en una unica inferencia por
+    lote. Con el motor ONNX eso es la diferencia entre 5 rostros en 26 ms y
+    cinco frames distintos con uno cada vez: la identificacion de un grupo pasa
+    de tardar varias rondas a resolverse en la misma. Con dlib no hay lote
+    posible y el recorrido es equivalente al de antes, asi que no cambia nada.
+
+    El reparto del presupuesto respeta el orden en que llega `matched`, que el
+    pipeline ya ordena por prioridad (primero quien falta por identificar, y de
+    esos el mas cercano).
+
+    Nota deliberada: esto corre ANTES de evaluar fraude, asi que un rostro que
+    luego resulte ser un intento de suplantacion habra consumido un embedding.
+    Es trabajo perdido, no un error: el bucle lo descarta sin tocar el cooldown,
+    igual que antes, y con el coste por rostro actual sale mas barato que
+    reordenar el bucle entero para evitarlo.
+
+    Returns:
+        (decisiones, rgb_full) — `decisiones` es una lista paralela a `matched`
+        con None (no le tocaba turno) o un PlanEmbedding.
+    """
+    decisiones = [None] * len(matched)
+    if presupuesto <= 0:
+        return decisiones, rgb_full
+
+    # Fase 1: quien tiene turno y pasa los filtros.
+    candidatos = []   # (indice, bbox_emb, puntos_emb)
+    for indice, (track, rostro) in enumerate(matched):
+        if len(candidatos) >= presupuesto:
+            break
+        if track is not None and ahora < track.t_proximo_embedding:
+            continue
+
+        # --- Gate de pose ---
+        # Un rostro muy girado produce un embedding que no se parece a ninguna
+        # plantilla o, peor, se parece a la de otra persona. Mejor no opinar
+        # que opinar mal.
+        pose_ok, motivo_pose = pose_apta_para_reconocimiento(
+            rostro.angulo_h, rostro.angulo_v,
+            MAX_YAW_RECONOCIMIENTO, MAX_PITCH_RECONOCIMIENTO
+        )
+
+        # --- Gate de calidad ---
+        # Se evalua sobre el frame REDUCIDO a proposito: asi los umbrales en
+        # pixeles significan lo mismo con cualquier camara, independientemente
+        # de su resolucion nativa.
+        calidad_ok, motivo_calidad = True, ""
+        if pose_ok:
+            calidad_ok, motivo_calidad = apta_para_reconocimiento(
+                imagen_rgb, rostro.bbox
+            )
+
+        if not (pose_ok and calidad_ok):
+            decisiones[indice] = PlanEmbedding(None, motivo_pose or motivo_calidad)
+            continue
+
+        img_emb, bbox_emb, rgb_full, puntos_emb = _preparar_crop(
+            imagen_rgb, rostro.bbox, color_full, escala_full, rgb_full,
+            rostro.puntos
+        )
+        candidatos.append((indice, bbox_emb, puntos_emb))
+
+    if not candidatos:
+        return decisiones, rgb_full
+
+    # Fase 2: una sola llamada para todos.
+    imagen = rgb_full if (escala_full > 1.0 and rgb_full is not None) else imagen_rgb
+    vectores = reconocedor.generar_lote(
+        imagen, [(bbox, puntos) for _, bbox, puntos in candidatos]
+    )
+
+    for (indice, _, _), vector in zip(candidatos, vectores):
+        decisiones[indice] = PlanEmbedding(vector, "")
+
+    return decisiones, rgb_full
 
 
 def _guardar_foto(imagen, prefijo):
@@ -261,11 +350,21 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
             # Reparto del presupuesto de embeddings del frame: primero quien
             # falta por identificar, y el más cercano de ellos.
             matched.sort(key=prioridad_reconocimiento)
-            embeddings_restantes = MAX_EMBEDDINGS_POR_FRAME
+
+            # Todos los embeddings del frame se generan AQUI, en una sola
+            # pasada, para que el motor pueda agruparlos en una unica
+            # inferencia. El bucle de abajo solo consume el resultado.
+            # En modo registro no se reconoce a nadie, asi que no se genera nada.
+            decisiones = [None] * len(matched)
+            if not modo_registro.activo:
+                decisiones, rgb_full = _planificar_embeddings(
+                    matched, ahora, reconocedor, imagen_rgb, color_full,
+                    escala_full, rgb_full, MAX_EMBEDDINGS_POR_FRAME
+                )
 
             tracks_frame = []  # Tracks para este frame
 
-            for track_existente, rostro in matched:
+            for indice, (track_existente, rostro) in enumerate(matched):
                 bbox = rostro.bbox
                 angulo = rostro.angulo_h
                 angulo_v = rostro.angulo_v
@@ -440,43 +539,20 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
                     pass  # Solo se muestra en preview
 
                 # === RECONOCIMIENTO (con gates + votacion temporal) ===
-                elif ahora >= track.t_proximo_embedding and embeddings_restantes > 0:
+                # Los gates y la generacion ya los hizo _planificar_embeddings;
+                # aqui solo se aplica lo que decidio. decisiones[i] es None
+                # cuando a este rostro no le tocaba turno en este frame.
+                elif decisiones[indice] is not None:
+                    plan = decisiones[indice]
 
-                    # --- Gate de pose ---
-                    # Un rostro muy girado produce un embedding que no se
-                    # parece a ninguna plantilla o, peor, se parece a la de
-                    # otra persona. Mejor no opinar que opinar mal.
-                    pose_ok, motivo_pose = pose_apta_para_reconocimiento(
-                        angulo, angulo_v,
-                        MAX_YAW_RECONOCIMIENTO, MAX_PITCH_RECONOCIMIENTO
-                    )
-
-                    # --- Gate de calidad ---
-                    # Se evalua sobre el frame REDUCIDO a proposito: asi los
-                    # umbrales en pixeles significan lo mismo con cualquier
-                    # camara, independientemente de su resolucion nativa.
-                    calidad_ok, motivo_calidad = True, ""
-                    if pose_ok:
-                        calidad_ok, motivo_calidad = apta_para_reconocimiento(
-                            imagen_rgb, bbox
-                        )
-
-                    if not (pose_ok and calidad_ok):
+                    if plan.motivo_gate:
                         # Frame no apto: no se vota (no contamina la ventana)
                         # y se reintenta enseguida, no al cabo del cooldown.
-                        track.motivo_gate = motivo_pose or motivo_calidad
+                        track.motivo_gate = plan.motivo_gate
                         track.t_proximo_embedding = ahora + REINTENTO_GATE
                     else:
                         track.motivo_gate = ""
-
-                        img_emb, bbox_emb, rgb_full, puntos_emb = _preparar_crop(
-                            imagen_rgb, bbox, color_full, escala_full, rgb_full,
-                            rostro.puntos
-                        )
-                        embeddings_restantes -= 1
-                        embedding = reconocedor.generar_embedding(
-                            img_emb, bbox_emb, puntos=puntos_emb
-                        )
+                        embedding = plan.embedding
 
                         if embedding is not None:
                             nombre, confianza, usuario_id = reconocedor.buscar(
