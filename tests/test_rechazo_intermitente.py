@@ -30,54 +30,129 @@ class TestCadenciaTrasDesconocido(unittest.TestCase):
     Tras declarar DESCONOCIDO hay que volver a mirar RAPIDO.
 
     La cadencia lenta esta pensada para re-confirmar a quien ya se identifico.
-    Aplicarla tambien tras un "no registrada" es justo lo contrario de lo que
-    hace falta: puede ser un usuario legitimo al que le fallo un frame.
+    Aplicarla tambien tras un "no registrada" es lo contrario de lo que hace
+    falta: puede ser un usuario legitimo al que le fallo un frame, y esperar 2 s
+    por intento convierte 3 votos en 6 segundos de "no te reconozco".
+
+    Este test EJECUTA el pipeline y mide el cooldown que asigna de verdad.
+    La version anterior duplicaba la decision del pipeline en el propio test y
+    comprobaba su copia, asi que habria seguido en verde aunque la linea real
+    estuviera mal. Un test circular es peor que ninguno: da confianza sin
+    comprobar nada.
     """
 
-    def _cadencia(self, sesion_tipo):
+    def _cooldown_medido(self, sesion_tipo):
+        """
+        Corre el pipeline y devuelve el cooldown que asigna a un track cuyo
+        sesion_tipo es `sesion_tipo`.
+
+        Se aprovecha que mostrar_preview se llama una vez por frame, DESPUES de
+        que el bucle haya asignado el cooldown: sirve de gancho para forzar el
+        estado entre frames y para leer el resultado.
+        """
+        import queue
+        import time
         import motor_ia.pipeline as pipeline
+        from motor_ia.deteccion.face_mesh import DetectorFaceMesh, RostroDetectado
+        from motor_ia.estado_registro import EstadoRegistro
+        from motor_ia.tracking import PersonaTrack
+
+        originales = {
+            "crear_camara": pipeline.crear_camara,
+            "cargar": pipeline._cargar_usuarios_supabase,
+            "preview": pipeline.mostrar_preview,
+            "snapshot": pipeline.subir_snapshot,
+            "cliente": pipeline.obtener_cliente,
+            "calidad": pipeline.apta_para_reconocimiento,
+            "pose": pipeline.pose_apta_para_reconocimiento,
+            "detectar": DetectorFaceMesh.detectar,
+            "init": PersonaTrack.__init__,
+        }
+
+        class _Camara:
+            profundidad_real = False
+            def conectar(self): pass
+            def obtener_frames(self):
+                return np.zeros((480, 640, 3), dtype=np.uint8), None
+            def cerrar(self): pass
+
+        puntos = np.zeros((468, 2), dtype=np.float32)
+        puntos[:] = (320.0, 240.0)
+        rostro = RostroDetectado((280, 200, 360, 280), 0.0, 0.0, "frontal", puntos)
+
+        tracks = []
+        def init_espia(self, *a, **k):
+            originales["init"](self, *a, **k)
+            tracks.append(self)
+
+        medido = {"cooldown": None}
+        frames = {"n": 0}
+
+        def preview(vista):
+            frames["n"] += 1
+            if not tracks:
+                return frames["n"] >= 6
+
+            track = tracks[0]
+            if frames["n"] == 1:
+                # Forzar el estado y volver a habilitar el turno, para que el
+                # siguiente frame pase por la linea que se quiere medir.
+                track.sesion_tipo = sesion_tipo
+                track.t_proximo_embedding = 0
+            elif medido["cooldown"] is None and track.t_proximo_embedding > 0:
+                medido["cooldown"] = track.t_proximo_embedding - time.time()
+                return True
+            return frames["n"] >= 6
+
+        try:
+            pipeline.crear_camara = lambda: _Camara()
+            pipeline._cargar_usuarios_supabase = lambda: []
+            pipeline.mostrar_preview = preview
+            pipeline.subir_snapshot = lambda f: None
+            pipeline.obtener_cliente = lambda: None
+            pipeline.apta_para_reconocimiento = lambda *a, **k: (True, "OK")
+            pipeline.pose_apta_para_reconocimiento = lambda *a, **k: (True, "")
+            DetectorFaceMesh.detectar = lambda self, img: [rostro]
+            PersonaTrack.__init__ = init_espia
+
+            pipeline.ejecutar_pipeline(queue.Queue(), EstadoRegistro())
+        finally:
+            pipeline.crear_camara = originales["crear_camara"]
+            pipeline._cargar_usuarios_supabase = originales["cargar"]
+            pipeline.mostrar_preview = originales["preview"]
+            pipeline.subir_snapshot = originales["snapshot"]
+            pipeline.obtener_cliente = originales["cliente"]
+            pipeline.apta_para_reconocimiento = originales["calidad"]
+            pipeline.pose_apta_para_reconocimiento = originales["pose"]
+            DetectorFaceMesh.detectar = originales["detectar"]
+            PersonaTrack.__init__ = originales["init"]
+
+        return medido["cooldown"]
+
+    def test_el_pipeline_asigna_la_cadencia_rapida_tras_desconocido(self):
         from config.settings import (
             COOLDOWN_EMBEDDING, COOLDOWN_EMBEDDING_VOTACION,
         )
-        # Espejo de la decision del pipeline (linea `ya_decidido = ...`).
-        ya_decidido = sesion_tipo == "ACCESO_PERMITIDO"
-        return COOLDOWN_EMBEDDING if ya_decidido else COOLDOWN_EMBEDDING_VOTACION
+        cooldown = self._cooldown_medido("DESCONOCIDO")
+        self.assertIsNotNone(cooldown, "el pipeline no asigno ningun cooldown")
+        # El margen absorbe el tiempo de procesar el frame (unos ms) y es de
+        # sobra para distinguir 0.2 s de 2.0 s, que es lo que importa.
+        self.assertAlmostEqual(cooldown, COOLDOWN_EMBEDDING_VOTACION, delta=0.15)
+        self.assertLess(
+            cooldown, COOLDOWN_EMBEDDING / 2,
+            f"Tras DESCONOCIDO se esta esperando {cooldown:.2f} s. Con la "
+            f"cadencia lenta, recuperarse cuesta segundos y el usuario ve "
+            f"'persona no registrada' mientras tanto."
+        )
 
-    def test_desconocido_usa_la_cadencia_rapida(self):
-        from config.settings import COOLDOWN_EMBEDDING_VOTACION
-        self.assertEqual(self._cadencia("DESCONOCIDO"),
-                         COOLDOWN_EMBEDDING_VOTACION)
-
-    def test_acceso_permitido_usa_la_lenta(self):
+    def test_el_pipeline_asigna_la_cadencia_lenta_tras_conceder_acceso(self):
+        # El otro lado: a quien ya se identifico solo hay que re-confirmarlo de
+        # vez en cuando. Si esto tambien fuera rapido, se gastaria CPU en
+        # comprobar lo que ya se sabe.
         from config.settings import COOLDOWN_EMBEDDING
-        self.assertEqual(self._cadencia("ACCESO_PERMITIDO"), COOLDOWN_EMBEDDING)
-
-    def test_sin_veredicto_usa_la_rapida(self):
-        from config.settings import COOLDOWN_EMBEDDING_VOTACION
-        self.assertEqual(self._cadencia(None), COOLDOWN_EMBEDDING_VOTACION)
-
-    def test_el_codigo_no_trata_desconocido_como_decidido(self):
-        # Ancla sobre el fuente: si alguien vuelve a meter DESCONOCIDO en la
-        # condicion, el sintoma reaparece y los tests de arriba, que son un
-        # espejo, seguirian en verde.
-        with open("motor_ia/pipeline.py", encoding="utf-8") as f:
-            fuente = f.read()
-        self.assertIn('ya_decidido = track.sesion_tipo == "ACCESO_PERMITIDO"',
-                      fuente)
-        self.assertNotIn(
-            'ya_decidido = track.sesion_tipo in ("ACCESO_PERMITIDO", "DESCONOCIDO")',
-            fuente,
-            "La cadencia lenta tras DESCONOCIDO es lo que causaba el 'luego de "
-            "un rato me reconoce'."
-        )
-
-    def test_recuperarse_es_mucho_mas_rapido(self):
-        from config.settings import (
-            COOLDOWN_EMBEDDING, COOLDOWN_EMBEDDING_VOTACION, VOTOS_REQUERIDOS,
-        )
-        antes = COOLDOWN_EMBEDDING * VOTOS_REQUERIDOS
-        ahora = COOLDOWN_EMBEDDING_VOTACION * VOTOS_REQUERIDOS
-        self.assertLess(ahora, antes / 3)
+        cooldown = self._cooldown_medido("ACCESO_PERMITIDO")
+        self.assertIsNotNone(cooldown)
+        self.assertAlmostEqual(cooldown, COOLDOWN_EMBEDDING, delta=0.15)
 
 
 class TestDetalleDelRechazo(unittest.TestCase):
