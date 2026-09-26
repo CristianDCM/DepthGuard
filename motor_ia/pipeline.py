@@ -859,6 +859,11 @@ def ejecutar_pipeline(cola_eventos, modo_registro, db_manager=None, frame_provid
         print(f" Error pipeline: {e}")
         import traceback
         traceback.print_exc()
+        # Se relanza: si el pipeline muere en silencio, el resto de hilos
+        # (heartbeat, WebRTC, comandos) sigue funcionando y la web muestra el
+        # sistema "en linea" mientras no se reconoce a nadie. iniciar.py lo
+        # detecta y detiene el proceso.
+        raise
 
     finally:
         cv2.destroyAllWindows()

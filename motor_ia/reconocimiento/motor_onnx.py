@@ -54,6 +54,24 @@ LADO_ENTRADA = 112
 # mas estable que un solo landmark.
 from motor_ia.antispoofing.liveness import OJO_IZQ, OJO_DER  # noqa: E402
 
+
+def mensaje_modelo_ausente(ruta):
+    """
+    Que hacer cuando falta el modelo. Empaquetado no hay Python ni scripts/,
+    asi que "ejecuta descargar_modelo.py" no le sirve a nadie: hay que decir
+    en que carpeta ponerlo.
+    """
+    from config import rutas
+    if rutas.EMPAQUETADO:
+        como = (f"   Copia w600k_mbf.onnx en la carpeta {rutas.DIR_MODELOS}\n"
+                "   o indica su ruta con RUTA_MODELO_ONNX en el .env.\n"
+                "   Si no lo tienes, pon MOTOR_EMBEDDING=dlib (hay que volver\n"
+                "   a registrar a los usuarios: los vectores no son compatibles).")
+    else:
+        como = "   Descargalo con: python scripts/descargar_modelo.py"
+    return f"No encuentro el modelo ONNX en {ruta}.\n{como}"
+
+
 _LM_NARIZ = 1
 _LM_BOCA_A = 61
 _LM_BOCA_B = 291
@@ -184,10 +202,7 @@ class MotorONNX:
 
     def __init__(self, ruta_modelo, hilos=0):
         if not os.path.isfile(ruta_modelo):
-            raise FileNotFoundError(
-                f"No encuentro el modelo ONNX en {ruta_modelo}.\n"
-                "   Descargalo con: python scripts/descargar_modelo.py"
-            )
+            raise FileNotFoundError(mensaje_modelo_ausente(ruta_modelo))
 
         try:
             import onnxruntime as ort

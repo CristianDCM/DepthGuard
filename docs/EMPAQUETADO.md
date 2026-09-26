@@ -88,6 +88,34 @@ con los datos en `C:\ProgramData\DepthGuard`. También sacó a la luz un test
 que nunca se había corrido en Windows y fallaba por el separador de rutas
 (`tests/test_privilegios.py`), ya corregido.
 
+### Primera prueba en el equipo real
+
+- La autoprueba pasó 9/9. En la primera ejecución fue lenta (Face Mesh 14 s,
+  WebRTC 30 s), algo típico del antivirus escaneando cada DLL la primera vez.
+- Dos intentos iniciales fallaron con `Failed to load Python DLL
+  ...python311.dll`, y el tercero funcionó. Todo apunta a que la copia a
+  `Program Files` aún no había terminado o el antivirus tenía el archivo
+  bloqueado. Si se repite con el instalador, hay que investigarlo.
+- **Fallo real encontrado:** el `.env` tenía `MOTOR_EMBEDDING=onnx`, pero el
+  modelo estaba en `scripts/_modelos/` del repo y no en
+  `C:\ProgramData\DepthGuard\modelos\`. El pipeline murió al ver el primer
+  rostro y **el proceso siguió vivo** (heartbeat, WebRTC y comandos
+  funcionando): la web lo mostraba en línea sin reconocer a nadie. Corregido:
+  - `iniciar.py` comprueba el modelo antes de arrancar y, si falta, no arranca
+    y dice en qué carpeta ponerlo.
+  - Si el pipeline termina, el proceso termina: con código 1 si fue por un
+    error y con código 0 si se pulsó `q` (`motor_ia/hilo_pipeline.py`).
+
+### Decisión pendiente: el modelo ONNX
+
+`w600k_mbf.onnx` sale del paquete `buffalo_s` de InsightFace, cuyos modelos
+preentrenados se publican **solo para investigación no comercial**. Dentro de
+un proyecto de grado encaja; distribuido a clientes, no. Opciones:
+- Incluirlo en el instalador: solo si el uso es académico o no comercial.
+- Que cada instalación lo aporte en `C:\ProgramData\DepthGuard\modelos\`.
+- Usar `MOTOR_EMBEDDING=dlib`, que no tiene esa restricción, a cambio de ser
+  más lento (unos 217 ms por rostro frente a 3,2 ms).
+
 ### Riesgos abiertos para la fase 4
 
 - **Visual C++ Redistributable.** Los runners de GitHub lo traen instalado, así

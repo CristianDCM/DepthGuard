@@ -35,8 +35,11 @@ if "--autoprueba" in sys.argv[1:]:
 
 from config.settings import (
     CAPTURAS_DIR, MODO_CAMARA, SUPABASE_URL, DIAS_RETENCION, CLEANUP_EN_EDGE,
+    MOTOR_EMBEDDING, RUTA_MODELO_ONNX,
 )
 from motor_ia.pipeline import ejecutar_pipeline
+from motor_ia.hilo_pipeline import HiloPipeline
+from motor_ia.reconocimiento.motor_onnx import mensaje_modelo_ausente
 from motor_ia.estado_registro import EstadoRegistro
 from backend.supabase_cliente import obtener_cliente
 from backend import postura_seguridad
@@ -84,7 +87,14 @@ if not _puede_arrancar:
     print("   es un entorno de desarrollo.")
     sys.exit(1)
 
-# 3. Ya con la configuración validada, crear el cliente.
+# 3. El motor de embeddings configurado tiene que poder cargarse. Si falta el
+#    modelo, el pipeline moriria al ver el primer rostro, con todo lo demas
+#    funcionando: mejor no arrancar y decir por que.
+if MOTOR_EMBEDDING == "onnx" and not os.path.isfile(RUTA_MODELO_ONNX):
+    print(f" {mensaje_modelo_ausente(RUTA_MODELO_ONNX)}")
+    sys.exit(1)
+
+# 4. Ya con la configuración validada, crear el cliente.
 try:
     obtener_cliente()
 except Exception as e:
@@ -109,12 +119,11 @@ else:
     camera_id = "entrada_secundaria"
     camera_type = "2D"
 
-# Hilo 1: Pipeline IA
-hilo_ia = threading.Thread(
-    target=ejecutar_pipeline,
-    args=(cola_eventos, modo_registro, None),  # db=None, ya no se usa SQLite
-    kwargs={"frame_provider": frame_provider},
-    daemon=True
+# Hilo 1: Pipeline IA. Vigilado: si termina, se detiene el proceso (abajo).
+hilo_ia = HiloPipeline(
+    ejecutar_pipeline,
+    cola_eventos, modo_registro, None,  # db=None, ya no se usa SQLite
+    frame_provider=frame_provider,
 )
 hilo_ia.start()
 
@@ -177,11 +186,24 @@ print()
 print("Presiona Ctrl+C para detener")
 print()
 
-# Mantener el proceso vivo (los hilos son daemon)
+# Mantener el proceso vivo (los hilos son daemon) MIENTRAS el pipeline viva.
+# Sin pipeline no se reconoce a nadie: seguir con heartbeat y WebRTC solo
+# haria que la web mostrara el sistema en linea sin serlo. Ver hilo_pipeline.py.
 try:
-    while True:
+    while hilo_ia.is_alive():
         time.sleep(1)
 except KeyboardInterrupt:
     print("\n  Apagando DepthGuard...")
     apagar_camaras()
     print(" DepthGuard detenido")
+    sys.exit(0)
+
+apagar_camaras()
+if hilo_ia.error is not None:
+    print()
+    print(" El pipeline de IA se detuvo por un error "
+          f"({type(hilo_ia.error).__name__}: {hilo_ia.error}).")
+    print("    DepthGuard se detiene para no quedar 'en linea' sin reconocer.")
+    sys.exit(1)
+print(" Preview cerrado: DepthGuard detenido")
+sys.exit(0)
