@@ -26,7 +26,7 @@ USB a la cámara/RealSense en Windows).
 |---|------|-----------|----------------|--------|
 | 1 | Rutas preparadas para empaquetar | `config/rutas.py`: sin empaquetar todo sigue en la raíz del repo; empaquetado, los datos van a `%PROGRAMDATA%\DepthGuard` | Tests + arrancar con `python iniciar.py` como siempre | Hecha |
 | 2 | Versiones congeladas | `empaquetado/requirements-build.txt` con las versiones exactas del equipo que funciona + `empaquetado/verificar_entorno.py` | Instalación limpia con el lock → verificador OK → suite completa en verde con esas versiones | Hecha |
-| 3 | Ejecutable (PyInstaller) | `DepthGuard.exe` + modo `--autoprueba` (carga todas las librerías y modelos y sale) + build en GitHub Actions (Windows) | La autoprueba pasa en CI; luego se prueba en el equipo con la cámara real | En CI |
+| 3 | Ejecutable (PyInstaller) | `DepthGuard.exe` + modo `--autoprueba` (carga todas las librerías y modelos y sale) + build en GitHub Actions (Windows) | La autoprueba pasa en CI; luego se prueba en el equipo con la cámara real | CI en verde; falta la prueba con cámara real |
 | 4 | Instalador (Inno Setup) | `DepthGuard-Setup.exe`: instala en Program Files y pide URL + clave de Supabase y modo de cámara | Instalar, actualizar y desinstalar en un Windows limpio | Pendiente |
 | 5 | Arranque automático | Arranca con Windows y se reinicia si se cae | Reiniciar el equipo; matar el proceso | Pendiente |
 | 6 | Publicación | GitHub Release versionada con el instalador; README actualizado | Descargar e instalar desde la Release | Pendiente |
@@ -80,8 +80,13 @@ Decisiones del `.spec`:
   "genai" de mediapipe, nunca Face Mesh.
 - **Sin UPX** (falsos positivos de antivirus) y **con consola** por ahora.
 
-Resultado: unos 700 MB en onedir, medido en el build de Linux; el de Windows
-aparece en el resumen de cada build.
+Resultado en Windows: **583 MB** en onedir (517 archivos), unos 295 MB
+comprimido en el artefacto. El build completo tarda unos 4 minutos.
+
+Primer build en Windows: la autoprueba pasó 9/9 desde una ruta con espacios,
+con los datos en `C:\ProgramData\DepthGuard`. También sacó a la luz un test
+que nunca se había corrido en Windows y fallaba por el separador de rutas
+(`tests/test_privilegios.py`), ya corregido.
 
 ### Riesgos abiertos para la fase 4
 
