@@ -1,0 +1,104 @@
+# Versiones EXACTAS con las que se construye el ejecutable (fase 2 de
+# docs/EMPAQUETADO.md).
+#
+# Salen del `pip freeze` del equipo donde DepthGuard funciona hoy
+# (Windows, Python 3.11.9), no de "la ultima version de cada cosa". Todas
+# tienen wheel precompilado para Windows + CPython 3.11, comprobado con
+# `pip download --platform win_amd64 --only-binary=:all:`.
+#
+# Se instala SIEMPRE con --no-deps:
+#
+#     pip install --no-deps -r empaquetado/requirements-build.txt
+#     python empaquetado/verificar_entorno.py
+#
+# --no-deps es deliberado. La lista ya esta completa (es un freeze), y sin
+# esa bandera pip volveria a resolver dependencias por su cuenta:
+#   - face-recognition declara `dlib`, y dlib-bin no cuenta como tal, asi que
+#     pip intentaria COMPILAR dlib desde el codigo fuente.
+#   - mediapipe arrastraria un segundo OpenCV.
+# verificar_entorno.py comprueba despues que no falte nada.
+#
+# Diferencias con el freeze original, a proposito:
+#   - Se quita opencv-python. mediapipe exige opencv-contrib-python, y los dos
+#     paquetes escriben el MISMO fichero cv2/cv2.pyd: cual queda depende del
+#     orden de instalacion. contrib es la misma version y contiene todo lo del
+#     otro, asi que se deja solo ese.
+#   - Se AGREGA setuptools (pip freeze no lo lista nunca). face_recognition_models
+#     hace `from pkg_resources import ...`, y pkg_resources desaparecio en
+#     setuptools 82: con una version nueva, `import face_recognition` falla y
+#     no hay reconocimiento. 80.10.2 es la ultima 80.x y todavia lo trae.
+#
+# No se toca requirements.txt: es el que usan INSTALAR.bat / INICIAR.bat, y
+# esta fase no cambia nada para quien arranca sin empaquetar.
+
+absl-py==2.5.0
+aioice==0.10.2
+aiortc==1.15.0
+annotated-types==0.8.0
+anyio==4.14.2
+attrs==26.1.0
+av==17.1.0
+certifi==2026.7.22
+cffi==2.1.1
+click==8.4.2
+colorama==0.4.6
+contourpy==1.3.3
+cryptography==50.0.0
+cycler==0.12.1
+deprecation==2.1.0
+dlib-bin==20.0.1
+dnspython==2.8.0
+face-recognition==1.3.0
+face_recognition_models==0.3.0
+flatbuffers==25.12.19
+fonttools==4.63.0
+google-crc32c==1.8.0
+h11==0.16.0
+h2==4.4.1
+hpack==4.2.0
+httpcore==1.0.9
+httpx==0.28.1
+hyperframe==6.1.0
+idna==3.18
+ifaddr==0.2.0
+jax==0.10.2
+jaxlib==0.10.2
+kiwisolver==1.5.0
+matplotlib==3.11.1
+mediapipe==0.10.14
+ml_dtypes==0.6.0
+multidict==6.7.1
+numpy==2.4.6
+onnxruntime==1.30.0
+opencv-contrib-python==5.0.0.93
+opt_einsum==3.4.0
+packaging==26.3
+pillow==12.3.0
+postgrest==2.31.0
+propcache==0.5.2
+protobuf==4.25.9
+pycparser==3.0
+pydantic==2.13.4
+pydantic_core==2.46.4
+pyee==13.0.1
+PyJWT==2.13.0
+pylibsrtp==1.0.0
+pyOpenSSL==26.4.0
+pyparsing==3.3.2
+pyrealsense2==2.58.3.10794
+python-dateutil==2.9.0.post0
+python-dotenv==1.2.2
+realtime==2.31.0
+scipy==1.17.1
+setuptools==80.10.2
+six==1.17.0
+sounddevice==0.5.5
+storage3==2.31.0
+StrEnum==0.4.15
+supabase==2.31.0
+supabase-auth==2.31.0
+supabase-functions==2.31.0
+typing-inspection==0.4.2
+typing_extensions==4.16.0
+websockets==15.0.1
+yarl==1.24.5

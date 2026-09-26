@@ -43,6 +43,7 @@ Set `MODO_CAMARA` in `.env`:
 | `backend/heartbeat.py` | Updates estado_sistema.ultimo_heartbeat every 30s |
 | `config/settings.py` | Loads `.env`, exports all config vars |
 | `config/rutas.py` | Where `.env`/captures/models live: repo root unpackaged, `%PROGRAMDATA%\DepthGuard` inside the executable. Plan: `docs/EMPAQUETADO.md` |
+| `empaquetado/requirements-build.txt` | Exact versions for the executable build. Install with `pip install --no-deps -r`, then run `empaquetado/verificar_entorno.py` |
 
 ## Dependencies
 

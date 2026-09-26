@@ -25,24 +25,41 @@ USB a la cámara/RealSense en Windows).
 | # | Fase | Resultado | Cómo se valida | Estado |
 |---|------|-----------|----------------|--------|
 | 1 | Rutas preparadas para empaquetar | `config/rutas.py`: sin empaquetar todo sigue en la raíz del repo; empaquetado, los datos van a `%PROGRAMDATA%\DepthGuard` | Tests + arrancar con `python iniciar.py` como siempre | Hecha |
-| 2 | Versiones congeladas | `empaquetado/requirements-build.txt` con las versiones exactas del equipo que funciona | `pip freeze` del venv que funciona hoy | Pendiente |
+| 2 | Versiones congeladas | `empaquetado/requirements-build.txt` con las versiones exactas del equipo que funciona + `empaquetado/verificar_entorno.py` | Instalación limpia con el lock → verificador OK → suite completa en verde con esas versiones | Hecha |
 | 3 | Ejecutable (PyInstaller) | `DepthGuard.exe` + modo `--autoprueba` (carga todas las librerías y modelos y sale) + build en GitHub Actions (Windows) | La autoprueba pasa en CI; luego se prueba en el equipo con la cámara real | Pendiente |
 | 4 | Instalador (Inno Setup) | `DepthGuard-Setup.exe`: instala en Program Files y pide URL + clave de Supabase y modo de cámara | Instalar, actualizar y desinstalar en un Windows limpio | Pendiente |
 | 5 | Arranque automático | Arranca con Windows y se reinicia si se cae | Reiniciar el equipo; matar el proceso | Pendiente |
 | 6 | Publicación | GitHub Release versionada con el instalador; README actualizado | Descargar e instalar desde la Release | Pendiente |
 
-### Riesgos ya detectados para la fase 2
+### Fase 2: qué se decidió y por qué
 
-- **Dos OpenCV a la vez.** Instalando `requirements.txt` en limpio, mediapipe
-  arrastra `opencv-contrib-python` 4.11 además del `opencv-python` 4.8 fijado.
-  Los dos escriben el mismo módulo `cv2`, y cuál gana depende del orden de
-  instalación. En el build tiene que quedar uno solo.
-- **`face-recognition` intenta compilar dlib.** Declara `dlib` como dependencia
-  y `dlib-bin` no cuenta como tal, así que pip intenta compilarlo desde el
-  código fuente. `INSTALAR.bat` lo evita con `--no-deps`, y el build debe
-  hacer lo mismo.
-- **`INSTALAR.bat` instala versiones sin fijar** (`pip install mediapipe`...),
-  distintas de las de `requirements.txt`. No se toca hasta la fase 6.
+- **El lock sale del equipo que funciona, no de `requirements.txt`.** Ese
+  equipo ya no coincide con el repo (numpy 2.4.6 frente a 1.24.4, OpenCV 5
+  frente a 4.8, supabase 2.31 frente a 2.15). Todas las versiones tienen
+  paquete precompilado para Windows + Python 3.11 (comprobado).
+- **Se instala con `--no-deps`.** Sin esa opción, pip intenta compilar dlib
+  (`face-recognition` pide `dlib` y `dlib-bin` no cuenta) y mete un segundo OpenCV.
+- **Un solo OpenCV: `opencv-contrib-python`.** El equipo tenía los dos, y ambos
+  escriben el mismo `cv2/cv2.pyd`. mediapipe exige el contrib, que además
+  incluye todo lo del otro.
+- **`setuptools==80.10.2` fijado.** `pip freeze` nunca lo lista, pero
+  `face_recognition_models` necesita `pkg_resources`, que desapareció en
+  setuptools 82. Con una versión nueva, `face_recognition` **no lanza un
+  error: llama a `quit()` y el proceso termina con código 0**, como si todo
+  hubiera ido bien. El verificador trata ese caso como fallo, y un test impide
+  subir setuptools en el lock.
+
+### Pendiente antes de la fase 3
+
+- **Dos tests intermitentes ya presentes en `main`:**
+  `tests/test_rechazo_intermitente.py::TestCadenciaTrasDesconocido` mide tiempo
+  real con un margen de 0,15 s y falla en aproximadamente 4 de cada 5
+  ejecuciones, también con las versiones de `requirements.txt`. El build de la
+  fase 3 ejecuta los tests antes de empaquetar, así que hay que hacerlos
+  robustos primero. Saltarlos no es una opción.
+- **`INSTALAR.bat` y `requirements.txt` desactualizados** respecto al equipo
+  que funciona. No se tocan hasta la fase 6, para no cambiar nada a quien
+  instala sin empaquetar.
 
 ## Dónde queda cada cosa una vez instalado
 
