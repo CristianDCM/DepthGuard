@@ -1,0 +1,86 @@
+# Construye DepthGuard.exe en Windows (fase 3 de docs/EMPAQUETADO.md).
+#
+# Cada paso es una puerta: si el entorno no es exactamente el del lock, si un
+# test falla o si el ejecutable no pasa su autoprueba, el build se para y NO se
+# publica ningun artefacto.
+name: Build Windows
+
+on:
+  push:
+    branches: [main, "claude/**"]
+    paths:
+      - "**.py"
+      - "empaquetado/**"
+      - ".github/workflows/build-windows.yml"
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    defaults:
+      run:
+        shell: pwsh
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # La misma version exacta que el equipo donde DepthGuard funciona.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11.9"
+          cache: pip
+          cache-dependency-path: empaquetado/requirements-*.txt
+
+      # --no-deps: la lista ya esta completa. Ver requirements-build.txt.
+      - name: Instalar dependencias exactas
+        run: |
+          python -m pip install --no-deps -r empaquetado/requirements-build.txt
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          python -m pip install --no-deps -r empaquetado/requirements-pyinstaller.txt
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      - name: Verificar entorno
+        run: python empaquetado/verificar_entorno.py
+
+      - name: Tests
+        run: python -m unittest discover -s tests -t .
+
+      - name: Empaquetar con PyInstaller
+        run: pyinstaller empaquetado/DepthGuard.spec --noconfirm
+
+      # Se ejecuta desde una ruta con espacios, como "C:\Program Files\...",
+      # y con otro directorio de trabajo, para que el ejecutable no dependa de
+      # arrancar desde su propia carpeta.
+      - name: Autoprueba del ejecutable
+        run: |
+          $destino = Join-Path $env:RUNNER_TEMP "Ruta Con Espacios\DepthGuard"
+          New-Item -ItemType Directory -Force -Path (Split-Path $destino) | Out-Null
+          Copy-Item -Recurse dist\DepthGuard $destino
+          Set-Location $env:RUNNER_TEMP
+          & (Join-Path $destino "DepthGuard.exe") --autoprueba
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "La autoprueba fallo (codigo $LASTEXITCODE)"
+            exit 1
+          }
+
+      - name: Tamano del ejecutable
+        run: |
+          $mb = (Get-ChildItem -Recurse dist\DepthGuard | Measure-Object Length -Sum).Sum / 1MB
+          "DepthGuard: {0:N0} MB" -f $mb | Tee-Object -Append $env:GITHUB_STEP_SUMMARY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DepthGuard-windows-${{ github.sha }}
+          path: dist/DepthGuard/
+          retention-days: 14
+          if-no-files-found: error

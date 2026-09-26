@@ -26,7 +26,7 @@ USB a la cámara/RealSense en Windows).
 |---|------|-----------|----------------|--------|
 | 1 | Rutas preparadas para empaquetar | `config/rutas.py`: sin empaquetar todo sigue en la raíz del repo; empaquetado, los datos van a `%PROGRAMDATA%\DepthGuard` | Tests + arrancar con `python iniciar.py` como siempre | Hecha |
 | 2 | Versiones congeladas | `empaquetado/requirements-build.txt` con las versiones exactas del equipo que funciona + `empaquetado/verificar_entorno.py` | Instalación limpia con el lock → verificador OK → suite completa en verde con esas versiones | Hecha |
-| 3 | Ejecutable (PyInstaller) | `DepthGuard.exe` + modo `--autoprueba` (carga todas las librerías y modelos y sale) + build en GitHub Actions (Windows) | La autoprueba pasa en CI; luego se prueba en el equipo con la cámara real | Pendiente |
+| 3 | Ejecutable (PyInstaller) | `DepthGuard.exe` + modo `--autoprueba` (carga todas las librerías y modelos y sale) + build en GitHub Actions (Windows) | La autoprueba pasa en CI; luego se prueba en el equipo con la cámara real | En CI |
 | 4 | Instalador (Inno Setup) | `DepthGuard-Setup.exe`: instala en Program Files y pide URL + clave de Supabase y modo de cámara | Instalar, actualizar y desinstalar en un Windows limpio | Pendiente |
 | 5 | Arranque automático | Arranca con Windows y se reinicia si se cae | Reiniciar el equipo; matar el proceso | Pendiente |
 | 6 | Publicación | GitHub Release versionada con el instalador; README actualizado | Descargar e instalar desde la Release | Pendiente |
@@ -49,14 +49,46 @@ USB a la cámara/RealSense en Windows).
   hubiera ido bien. El verificador trata ese caso como fallo, y un test impide
   subir setuptools en el lock.
 
-### Pendiente antes de la fase 3
+### Fase 3: cómo se construye
 
-- **Dos tests intermitentes ya presentes en `main`:**
-  `tests/test_rechazo_intermitente.py::TestCadenciaTrasDesconocido` mide tiempo
-  real con un margen de 0,15 s y falla en aproximadamente 4 de cada 5
-  ejecuciones, también con las versiones de `requirements.txt`. El build de la
-  fase 3 ejecuta los tests antes de empaquetar, así que hay que hacerlos
-  robustos primero. Saltarlos no es una opción.
+Todo lo hace `.github/workflows/build-windows.yml` en un Windows de GitHub.
+Cada paso es una puerta: si falla, no se publica nada.
+
+1. Python **3.11.9** exacto e instalación con `--no-deps` de
+   `requirements-build.txt` y `requirements-pyinstaller.txt`.
+2. `empaquetado/verificar_entorno.py`.
+3. La suite completa (`python -m unittest discover -s tests -t .`).
+4. `pyinstaller empaquetado/DepthGuard.spec`.
+5. `DepthGuard.exe --autoprueba`, ejecutado desde una ruta con espacios y desde
+   otro directorio de trabajo.
+6. Se sube `dist/DepthGuard/` como artefacto (14 días).
+
+Para construirlo en tu propio Windows, los mismos comandos en un venv limpio
+con Python 3.11.9.
+
+La autoprueba (`autoprueba.py`) hace trabajar una vez cada pieza nativa sin
+cámara, sin `.env` y sin Supabase: carpeta de datos, OpenCV, Face Mesh,
+embedding de dlib, codificadores VP8/H264, SDK de RealSense, onnxruntime,
+SDK de Supabase y el pipeline. Ya demostró su valor: la primera versión del
+`.spec` excluía `mediapipe.tasks.python.genai` y rompía Face Mesh, y fue la
+autoprueba la que lo detectó.
+
+Decisiones del `.spec`:
+- **Se copian a mano** los modelos de mediapipe, los `.dat` de dlib y las
+  librerías de pyrealsense2: no hay hook que lo haga.
+- **Se excluyen jax, jaxlib y scipy** (unos 490 MB). Solo los usa el conversor
+  "genai" de mediapipe, nunca Face Mesh.
+- **Sin UPX** (falsos positivos de antivirus) y **con consola** por ahora.
+
+Resultado: unos 700 MB en onedir, medido en el build de Linux; el de Windows
+aparece en el resumen de cada build.
+
+### Riesgos abiertos para la fase 4
+
+- **Visual C++ Redistributable.** Los runners de GitHub lo traen instalado, así
+  que la autoprueba pasaría aunque el ejecutable lo necesite. Un Windows limpio
+  puede no tenerlo. El instalador debe incluirlo o comprobarlo, y la prueba
+  de la fase 4 tiene que hacerse en un Windows limpio.
 - **`INSTALAR.bat` y `requirements.txt` desactualizados** respecto al equipo
   que funciona. No se tocan hasta la fase 6, para no cambiar nada a quien
   instala sin empaquetar.

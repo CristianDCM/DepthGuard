@@ -27,3 +27,7 @@ runtime_log.txt
 
 # Modelos ONNX descargados por scripts/medir_onnx.py (14 MB, no van al repo)
 scripts/_modelos/
+
+# Salida de PyInstaller (empaquetado/DepthGuard.spec)
+build/
+dist/

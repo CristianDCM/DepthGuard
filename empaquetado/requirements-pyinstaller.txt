@@ -1,0 +1,13 @@
+# Herramienta de build, con versiones fijadas igual que el runtime
+# (requirements-build.txt), para que el ejecutable no cambie porque salio una
+# PyInstaller nueva. Se instala con --no-deps DESPUES del runtime: packaging y
+# setuptools ya vienen fijados alli (setuptools debe seguir < 82, ver ese
+# fichero).
+#
+#     pip install --no-deps -r empaquetado/requirements-pyinstaller.txt
+
+pyinstaller==6.22.3
+pyinstaller-hooks-contrib==2026.7
+altgraph==0.17.5
+pefile==2024.8.26 ; sys_platform == "win32"
+pywin32-ctypes==0.2.3 ; sys_platform == "win32"
