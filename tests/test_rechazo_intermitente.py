@@ -69,10 +69,18 @@ class TestCadenciaTrasDesconocido(unittest.TestCase):
             "init": PersonaTrack.__init__,
         }
 
+        medido = {"cooldown": None, "t_captura": None}
+
         class _Camara:
             profundidad_real = False
             def conectar(self): pass
             def obtener_frames(self):
+                # El pipeline toma `ahora` justo despues de esta llamada y
+                # calcula el cooldown desde ahi. Medir desde este instante, y
+                # no desde time.time() en el preview, deja fuera el tiempo de
+                # procesar el frame (el embedding de dlib tarda mas de 0.15 s
+                # en una maquina lenta y hacia fallar el test al azar).
+                medido["t_captura"] = time.time()
                 return np.zeros((480, 640, 3), dtype=np.uint8), None
             def cerrar(self): pass
 
@@ -85,7 +93,6 @@ class TestCadenciaTrasDesconocido(unittest.TestCase):
             originales["init"](self, *a, **k)
             tracks.append(self)
 
-        medido = {"cooldown": None}
         frames = {"n": 0}
 
         def preview(vista):
@@ -100,7 +107,7 @@ class TestCadenciaTrasDesconocido(unittest.TestCase):
                 track.sesion_tipo = sesion_tipo
                 track.t_proximo_embedding = 0
             elif medido["cooldown"] is None and track.t_proximo_embedding > 0:
-                medido["cooldown"] = track.t_proximo_embedding - time.time()
+                medido["cooldown"] = track.t_proximo_embedding - medido["t_captura"]
                 return True
             return frames["n"] >= 6
 
@@ -135,9 +142,9 @@ class TestCadenciaTrasDesconocido(unittest.TestCase):
         )
         cooldown = self._cooldown_medido("DESCONOCIDO")
         self.assertIsNotNone(cooldown, "el pipeline no asigno ningun cooldown")
-        # El margen absorbe el tiempo de procesar el frame (unos ms) y es de
-        # sobra para distinguir 0.2 s de 2.0 s, que es lo que importa.
-        self.assertAlmostEqual(cooldown, COOLDOWN_EMBEDDING_VOTACION, delta=0.15)
+        # Medido desde la captura del frame, la diferencia con el valor exacto
+        # son microsegundos: el margen solo cubre la resolucion del reloj.
+        self.assertAlmostEqual(cooldown, COOLDOWN_EMBEDDING_VOTACION, delta=0.05)
         self.assertLess(
             cooldown, COOLDOWN_EMBEDDING / 2,
             f"Tras DESCONOCIDO se esta esperando {cooldown:.2f} s. Con la "
@@ -152,7 +159,7 @@ class TestCadenciaTrasDesconocido(unittest.TestCase):
         from config.settings import COOLDOWN_EMBEDDING
         cooldown = self._cooldown_medido("ACCESO_PERMITIDO")
         self.assertIsNotNone(cooldown)
-        self.assertAlmostEqual(cooldown, COOLDOWN_EMBEDDING, delta=0.15)
+        self.assertAlmostEqual(cooldown, COOLDOWN_EMBEDDING, delta=0.05)
 
 
 class TestDetalleDelRechazo(unittest.TestCase):
