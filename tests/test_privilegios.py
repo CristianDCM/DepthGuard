@@ -65,7 +65,9 @@ def _buscar(patron):
                 valor = next((v for v in valor if v), None)
             if not valor:
                 continue
-            rel = os.path.relpath(ruta, RAIZ)
+            # Siempre con "/": en Windows relpath devuelve "backend\\x.py" y
+            # las comparaciones de abajo fallarian solo por el separador.
+            rel = os.path.relpath(ruta, RAIZ).replace(os.sep, "/")
             hallazgos.setdefault(valor, []).append(rel)
     return hallazgos
 
