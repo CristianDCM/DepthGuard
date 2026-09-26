@@ -27,6 +27,12 @@ if sys.stdout.encoding != 'utf-8':
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Antes que nada: la autoprueba no necesita .env, camara ni Supabase, y tiene
+# que poder correr en el build de GitHub (ver autoprueba.py).
+if "--autoprueba" in sys.argv[1:]:
+    from autoprueba import ejecutar as _autoprueba
+    sys.exit(_autoprueba())
+
 from config.settings import (
     CAPTURAS_DIR, MODO_CAMARA, SUPABASE_URL, DIAS_RETENCION, CLEANUP_EN_EDGE,
 )
