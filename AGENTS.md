@@ -42,6 +42,7 @@ Set `MODO_CAMARA` in `.env`:
 | `backend/supabase_sync.py` | Store-and-forward: queue → Supabase historial |
 | `backend/heartbeat.py` | Updates estado_sistema.ultimo_heartbeat every 30s |
 | `config/settings.py` | Loads `.env`, exports all config vars |
+| `config/rutas.py` | Where `.env`/captures/models live: repo root unpackaged, `%PROGRAMDATA%\DepthGuard` inside the executable. Plan: `docs/EMPAQUETADO.md` |
 
 ## Dependencies
 

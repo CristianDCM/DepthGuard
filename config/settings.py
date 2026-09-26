@@ -5,13 +5,17 @@ Lee el archivo .env UNA VEZ al iniciar.
 
 import os
 
-_BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from config import rutas
+
+# Carpeta de datos: la raiz del repo sin empaquetar, %PROGRAMDATA%\DepthGuard
+# dentro del ejecutable. Ver config/rutas.py.
+_BASE_DIR = rutas.DIR_DATOS
 
 
 def _cargar_env():
     """Lee .env y retorna diccionario."""
     config = {}
-    ruta = os.path.join(_BASE_DIR, ".env")
+    ruta = rutas.RUTA_ENV
 
     if not os.path.exists(ruta):
         print(" Archivo .env no encontrado. Usando valores por defecto.")
@@ -207,9 +211,7 @@ if MOTOR_EMBEDDING not in _MOTORES:
 
 RUTA_MODELO_ONNX = _env.get(
     "RUTA_MODELO_ONNX",
-    # _BASE_DIR y no BASE_DIR: el alias publico se define al final del fichero,
-    # despues de esta linea.
-    os.path.join(_BASE_DIR, "scripts", "_modelos", "w600k_mbf.onnx")
+    os.path.join(rutas.DIR_MODELOS, "w600k_mbf.onnx")
 )
 
 # Hilos internos de onnxruntime. 0 = que decida la libreria (usa los nucleos
@@ -385,7 +387,7 @@ def valor_bruto(clave, defecto=""):
 
 # === RUTAS ===
 BASE_DIR = _BASE_DIR
-CAPTURAS_DIR = os.path.join(BASE_DIR, "capturas")
+CAPTURAS_DIR = rutas.CAPTURAS_DIR
 
 # === SENALIZACION WEBRTC (hallazgo C2) ===
 #
